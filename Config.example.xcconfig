@@ -1,0 +1,6 @@
+// Copy to Config.xcconfig (gitignored) and fill in from Supabase → Project Settings → API.
+// Same project as the web app — the backends are shared.
+SUPABASE_URL = https:/$()/xxxx.supabase.co
+SUPABASE_ANON_KEY = eyJ...
+
+// xcconfig note: the $() in the URL stops // from being parsed as a comment.
