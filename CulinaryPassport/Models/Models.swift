@@ -35,6 +35,22 @@ struct Entry: Codable, Identifiable, Hashable {
     enum Visibility: String, Codable { case `public`, groups, `private` }
 }
 
+/// Insert payload — id / created_at come from Postgres defaults.
+struct NewEntry: Codable {
+    let userId: UUID
+    var countryCode: String
+    var restaurantName: String
+    var city: String
+    var dateTried: String
+    var rating: Int
+    var notes: String
+    var signatureDish: String
+    var wouldReturn: Bool
+    var placeId: String?
+    var lat: Double?
+    var lng: Double?
+}
+
 struct Group: Codable, Identifiable, Hashable {
     let id: UUID
     var name: String

@@ -27,7 +27,17 @@ fill in your Supabase URL + anon key.
 
 ## Where things stand
 
-Scaffold only. Compiles to a shell app with auth + models wired to Supabase.
+Working scaffold — auth-gated tab shell with:
+- **Journal**: entries list / add / delete wired to Supabase (country picker from the
+  bundled Natural Earth data, same demonym + rare-find logic as the web app)
+- **Groups**: list, create (owner-seeded), join by invite code (`join_group_by_invite` RPC)
+- **Profile**: PhotosPicker selfie → Vision face-crop → `generate-avatar` edge function
+  → avatar display (server enforces the 3/day limit)
+- **Globe**: SceneKit placeholder sphere; polygon port is MVP step 2
+
+Restaurant autocomplete on iOS goes through the `places-proxy` edge function
+(web repo) — never embed a Places key in the binary.
+
 See `docs/ROADMAP.md` for the ordered build plan (MVP → v1.3), which mirrors the
 productization spec in the web repo.
 

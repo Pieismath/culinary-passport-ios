@@ -45,12 +45,28 @@ final class SupabaseService {
         try await client.from("entries").select().order("date_tried", ascending: false).execute().value
     }
 
-    func addEntry(_ entry: Entry) async throws {
+    func addEntry(_ entry: NewEntry) async throws {
         try await client.from("entries").insert(entry).execute()
+    }
+
+    func deleteEntry(id: UUID) async throws {
+        try await client.from("entries").delete().eq("id", value: id).execute()
     }
 
     func myGroups() async throws -> [Group] {
         try await client.from("groups").select().execute().value
+    }
+
+    func createGroup(name: String) async throws -> Group {
+        let session = try await client.auth.session
+        let group: Group = try await client.from("groups")
+            .insert(["name": name, "created_by": session.user.id.uuidString])
+            .select().single().execute().value
+        // seed the creator as owner (policy allows inserting yourself)
+        try await client.from("group_members")
+            .insert(["group_id": group.id.uuidString, "user_id": session.user.id.uuidString, "role": "owner"])
+            .execute()
+        return group
     }
 
     func joinGroup(inviteCode: String) async throws -> UUID {
