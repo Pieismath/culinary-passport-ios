@@ -156,6 +156,41 @@ final class SupabaseService {
 
     // ── Follow graph (v1.1) ──────────────────────────────────────────────────
 
+    func publicProfile(id: UUID) async throws -> Profile {
+        try await client.from("profiles").select().eq("id", value: id).single().execute().value
+    }
+
+    /// Editable profile fields — username uniqueness is enforced by the DB.
+    func updateMyProfile(name: String, username: String?, bio: String?, isPublic: Bool) async throws {
+        struct Patch: Encodable {
+            let name: String
+            let username: String?
+            let bio: String?
+            let isPublic: Bool
+        }
+        let session = try await client.auth.session
+        try await client.from("profiles")
+            .update(Patch(name: name, username: username, bio: bio, isPublic: isPublic))
+            .eq("id", value: session.user.id)
+            .execute()
+    }
+
+    func followCounts(userId: UUID) async throws -> (followers: Int, following: Int) {
+        async let followers: [Follow] = client.from("follows").select()
+            .eq("followee_id", value: userId).execute().value
+        async let followingRows: [Follow] = client.from("follows").select()
+            .eq("follower_id", value: userId).execute().value
+        return (try await followers.count, try await followingRows.count)
+    }
+
+    /// Another user's public entries (RLS returns only rows they've shared).
+    func publicEntries(userId: UUID) async throws -> [Entry] {
+        try await client.from("entries").select()
+            .eq("user_id", value: userId)
+            .order("date_tried", ascending: false)
+            .execute().value
+    }
+
     func searchPublicProfiles(_ query: String) async throws -> [Profile] {
         try await client.from("profiles").select()
             .eq("is_public", value: true)

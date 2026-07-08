@@ -12,29 +12,33 @@ struct PeopleView: View {
         NavigationStack {
             List {
                 ForEach(results) { profile in
-                    HStack(spacing: 12) {
-                        AsyncImage(url: profile.avatarUrl.flatMap(URL.init)) { image in
-                            image.resizable().scaledToFill()
-                        } placeholder: {
-                            Image(systemName: "person.crop.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(width: 40, height: 40)
-                        .clipShape(Circle())
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(profile.name).font(.headline)
-                            if let username = profile.username {
-                                Text("@\(username)").font(.caption).foregroundStyle(.secondary)
+                    NavigationLink {
+                        PublicProfileView(profile: profile)
+                    } label: {
+                        HStack(spacing: 12) {
+                            AsyncImage(url: profile.avatarUrl.flatMap(URL.init)) { image in
+                                image.resizable().scaledToFill()
+                            } placeholder: {
+                                Image(systemName: "person.crop.circle.fill")
+                                    .foregroundStyle(.secondary)
                             }
+                            .frame(width: 40, height: 40)
+                            .clipShape(Circle())
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(profile.name).font(.headline)
+                                if let username = profile.username {
+                                    Text("@\(username)").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                            let follows = following.contains(profile.id)
+                            Button(follows ? "Following" : "Follow") {
+                                Task { await toggle(profile.id, to: !follows) }
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(follows ? .secondary : .accentColor)
                         }
-                        Spacer()
-                        let follows = following.contains(profile.id)
-                        Button(follows ? "Following" : "Follow") {
-                            Task { await toggle(profile.id, to: !follows) }
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(follows ? .secondary : .accentColor)
                     }
                 }
                 if let status { Text(status).font(.caption).foregroundStyle(.secondary) }

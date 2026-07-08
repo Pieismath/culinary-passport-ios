@@ -9,6 +9,8 @@ struct ProfileView: View {
     @State private var busy = false
     @State private var status: String?
     @State private var equipped = EquippedStore.load()
+    @State private var profile: Profile?
+    @State private var showEdit = false
 
     var body: some View {
         NavigationStack {
@@ -23,12 +25,28 @@ struct ProfileView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(busy)
 
+                if let profile {
+                    VStack(spacing: 2) {
+                        Text(profile.name).font(.title3).bold()
+                        if let username = profile.username, !username.isEmpty {
+                            Text("@\(username)").font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        Label(profile.isPublic == true ? "Public profile" : "Private profile",
+                              systemImage: profile.isPublic == true ? "globe" : "lock")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
                 NavigationLink {
                     AvatarCustomizeView(avatarURL: avatarURL)
                 } label: {
                     Label("Customize avatar", systemImage: "wand.and.stars")
                 }
                 .disabled(avatarURL == nil)
+
+                Button { showEdit = true } label: {
+                    Label("Edit profile", systemImage: "pencil")
+                }
 
                 if let status {
                     Text(status)
@@ -51,14 +69,18 @@ struct ProfileView: View {
             .onChange(of: pickedItem) {
                 Task { await generate() }
             }
+            .sheet(isPresented: $showEdit) {
+                if let profile {
+                    ProfileEditSheet(profile: profile) { await loadAvatar() }
+                }
+            }
         }
     }
 
     private func loadAvatar() async {
-        guard let session = try? await SupabaseService.shared.client.auth.session else { return }
-        let profiles: [Profile]? = try? await SupabaseService.shared.client
-            .from("profiles").select().eq("id", value: session.user.id).execute().value
-        if let urlString = profiles?.first?.avatarUrl { avatarURL = URL(string: urlString) }
+        guard let me = try? await SupabaseService.shared.myProfile() else { return }
+        profile = me
+        if let urlString = me.avatarUrl { avatarURL = URL(string: urlString) }
     }
 
     private func generate() async {
@@ -77,6 +99,78 @@ struct ProfileView: View {
             status = "Done (\(result.provider))"
         } catch {
             status = error.localizedDescription // includes the 3/day limit message from the server
+        }
+    }
+}
+
+/// Edit name / username / bio and toggle profile visibility (v1.1 item 7).
+struct ProfileEditSheet: View {
+    let profile: Profile
+    var onSave: () async -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var username: String
+    @State private var bio: String
+    @State private var isPublic: Bool
+    @State private var saving = false
+    @State private var error: String?
+
+    init(profile: Profile, onSave: @escaping () async -> Void) {
+        self.profile = profile
+        self.onSave = onSave
+        _name = State(initialValue: profile.name)
+        _username = State(initialValue: profile.username ?? "")
+        _bio = State(initialValue: profile.bio ?? "")
+        _isPublic = State(initialValue: profile.isPublic ?? false)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Name") {
+                    TextField("Name", text: $name)
+                    TextField("Username", text: $username)
+                        .autocapitalization(.none)
+                        .autocorrectionDisabled()
+                }
+                Section("Bio") {
+                    TextField("A line about your taste", text: $bio, axis: .vertical)
+                }
+                Section {
+                    Toggle("Public profile", isOn: $isPublic)
+                } footer: {
+                    Text("Public profiles can be found in People search and followed.")
+                }
+                if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            }
+            .navigationTitle("Edit profile")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(saving ? "Saving…" : "Save") { Task { await save() } }
+                        .disabled(name.isEmpty || saving)
+                }
+            }
+        }
+    }
+
+    private func save() async {
+        saving = true
+        defer { saving = false }
+        let trimmedUser = username.trimmingCharacters(in: .whitespaces)
+        do {
+            try await SupabaseService.shared.updateMyProfile(
+                name: name,
+                username: trimmedUser.isEmpty ? nil : trimmedUser,
+                bio: bio.trimmingCharacters(in: .whitespaces).isEmpty ? nil : bio,
+                isPublic: isPublic
+            )
+            await onSave()
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription // e.g. username-taken from the DB
         }
     }
 }
