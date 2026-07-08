@@ -28,6 +28,17 @@ final class SessionStore {
 
     init() {
         Task { await observeAuth() }
+        #if DEBUG
+        // Headless test hook: launch with `-email x -password y` to sign in automatically.
+        let args = ProcessInfo.processInfo.arguments
+        if let e = args.firstIndex(of: "-email"), e + 1 < args.count,
+           let p = args.firstIndex(of: "-password"), p + 1 < args.count {
+            Task {
+                try? await SupabaseService.shared.client.auth.signIn(
+                    email: args[e + 1], password: args[p + 1])
+            }
+        }
+        #endif
     }
 
     @MainActor
