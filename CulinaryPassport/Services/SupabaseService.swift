@@ -54,6 +54,10 @@ final class SupabaseService {
         return try await client.from("profiles").select().eq("id", value: session.user.id).single().execute().value
     }
 
+    func updateEntry(id: UUID, _ patch: EntryUpdate) async throws {
+        try await client.from("entries").update(patch).eq("id", value: id).execute()
+    }
+
     func deleteEntry(id: UUID) async throws {
         try await client.from("entries").delete().eq("id", value: id).execute()
     }

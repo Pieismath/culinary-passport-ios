@@ -51,6 +51,21 @@ struct NewEntry: Codable {
     var lng: Double?
 }
 
+/// Update payload for editing an existing entry (id / created_at are immutable).
+struct EntryUpdate: Codable {
+    var countryCode: String
+    var restaurantName: String
+    var city: String
+    var dateTried: String
+    var rating: Int
+    var notes: String
+    var signatureDish: String
+    var wouldReturn: Bool
+    var placeId: String?
+    var lat: Double?
+    var lng: Double?
+}
+
 struct Group: Codable, Identifiable, Hashable {
     let id: UUID
     var name: String
