@@ -1,7 +1,8 @@
 import SwiftUI
+import PhotosUI
 
-/// MVP step 3: personal entries — list, add, edit, delete. Restaurant field is
-/// backed by Google Places autocomplete through the places-proxy edge function.
+/// MVP step 3: personal entries — list, add, edit, delete, with photos. Restaurant
+/// field is backed by Google Places autocomplete through the places-proxy function.
 struct EntriesView: View {
     @State private var entries: [Entry] = []
     @State private var showAdd = false
@@ -64,8 +65,22 @@ struct EntryRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Text(CountryStore.byCode[entry.countryCode]?.flagEmoji ?? "🌍")
-                .font(.title2)
+            if let first = entry.photos.first, let url = SupabaseService.shared.photoURL(first) {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Color(.secondarySystemBackground)
+                }
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(alignment: .bottomTrailing) {
+                    Text(CountryStore.byCode[entry.countryCode]?.flagEmoji ?? "🌍")
+                        .font(.caption2)
+                }
+            } else {
+                Text(CountryStore.byCode[entry.countryCode]?.flagEmoji ?? "🌍")
+                    .font(.title2)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.restaurantName).font(.headline)
                 Text("\(CountryStore.byCode[entry.countryCode]?.cuisineName ?? entry.countryCode) · \(entry.dateTried)")
@@ -111,6 +126,13 @@ struct EntrySheet: View {
     @State private var searchTask: Task<Void, Never>?
     @State private var suppressSearch = false
 
+    // Photos: existing stored paths (edit) + newly picked images pending upload.
+    @State private var existingPhotos: [String] = []
+    @State private var pickedItems: [PhotosPickerItem] = []
+    @State private var newPhotos: [PickedPhoto] = []
+
+    private struct PickedPhoto: Identifiable { let id = UUID(); let image: UIImage; let jpeg: Data }
+
     private var isEdit: Bool { if case .edit = mode { return true } else { return false } }
 
     var body: some View {
@@ -139,6 +161,29 @@ struct EntrySheet: View {
                         }
                     }
                     TextField("City", text: $city)
+                }
+
+                Section("Photos") {
+                    if !existingPhotos.isEmpty || !newPhotos.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(existingPhotos, id: \.self) { path in
+                                    PhotoThumb(url: SupabaseService.shared.photoURL(path)) {
+                                        existingPhotos.removeAll { $0 == path }
+                                    }
+                                }
+                                ForEach(newPhotos) { photo in
+                                    PhotoThumb(image: photo.image) {
+                                        newPhotos.removeAll { $0.id == photo.id }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    PhotosPicker(selection: $pickedItems, maxSelectionCount: 3, matching: .images) {
+                        Label("Add photos", systemImage: "photo.on.rectangle")
+                    }
+                    .onChange(of: pickedItems) { _, items in Task { await loadPicked(items) } }
                 }
 
                 DatePicker("Date", selection: $date, in: ...Date(), displayedComponents: .date)
@@ -176,8 +221,35 @@ struct EntrySheet: View {
         placeId = entry.placeId
         lat = entry.lat
         lng = entry.lng
+        existingPhotos = entry.photos
         let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
         if let d = fmt.date(from: entry.dateTried) { date = d }
+    }
+
+    // MARK: Photos
+
+    private func loadPicked(_ items: [PhotosPickerItem]) async {
+        var loaded: [PickedPhoto] = []
+        for item in items {
+            if let data = try? await item.loadTransferable(type: Data.self),
+               let image = UIImage(data: data),
+               let jpeg = ImageScaler.jpeg(image) {
+                loaded.append(PickedPhoto(image: UIImage(data: jpeg) ?? image, jpeg: jpeg))
+            }
+        }
+        await MainActor.run {
+            newPhotos.append(contentsOf: loaded)
+            pickedItems = []
+        }
+    }
+
+    /// Upload any newly-picked photos and return the full path list (existing + new).
+    private func uploadPhotos() async throws -> [String] {
+        var paths = existingPhotos
+        for photo in newPhotos {
+            paths.append(try await SupabaseService.shared.uploadPhoto(photo.jpeg))
+        }
+        return paths
     }
 
     // MARK: Places autocomplete
@@ -219,6 +291,7 @@ struct EntrySheet: View {
         let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
         let dateStr = fmt.string(from: date)
         do {
+            let photos = try await uploadPhotos()
             switch mode {
             case .add:
                 let session = try await SupabaseService.shared.client.auth.session
@@ -234,7 +307,8 @@ struct EntrySheet: View {
                     wouldReturn: wouldReturn,
                     placeId: placeId,
                     lat: lat,
-                    lng: lng
+                    lng: lng,
+                    photos: photos
                 ))
             case .edit(let entry):
                 try await SupabaseService.shared.updateEntry(id: entry.id, EntryUpdate(
@@ -248,7 +322,8 @@ struct EntrySheet: View {
                     wouldReturn: wouldReturn,
                     placeId: placeId,
                     lat: lat,
-                    lng: lng
+                    lng: lng,
+                    photos: photos
                 ))
             }
             await onSave()
@@ -256,5 +331,48 @@ struct EntrySheet: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+// MARK: - Photo helpers
+
+private struct PhotoThumb: View {
+    var url: URL? = nil
+    var image: UIImage? = nil
+    let onRemove: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            SwiftUI.Group {
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill()
+                } else {
+                    AsyncImage(url: url) { $0.resizable().scaledToFill() } placeholder: {
+                        Color(.secondarySystemBackground)
+                    }
+                }
+            }
+            .frame(width: 64, height: 64)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.white, .black.opacity(0.55))
+            }
+            .padding(3)
+        }
+    }
+}
+
+/// Downscale + JPEG-encode a picked photo to keep uploads small (mirrors the
+/// web app's compressPhoto: longest edge capped, quality ~0.82).
+enum ImageScaler {
+    static func jpeg(_ image: UIImage, maxDim: CGFloat = 1400, quality: CGFloat = 0.82) -> Data? {
+        let longest = max(image.size.width, image.size.height)
+        let scale = min(1, maxDim / max(longest, 1))
+        let target = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: target)
+        let scaled = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: target)) }
+        return scaled.jpegData(compressionQuality: quality)
     }
 }

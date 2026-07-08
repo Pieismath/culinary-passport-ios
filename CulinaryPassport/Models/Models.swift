@@ -49,6 +49,7 @@ struct NewEntry: Codable {
     var placeId: String?
     var lat: Double?
     var lng: Double?
+    var photos: [String] = []
 }
 
 /// Update payload for editing an existing entry (id / created_at are immutable).
@@ -64,6 +65,7 @@ struct EntryUpdate: Codable {
     var placeId: String?
     var lat: Double?
     var lng: Double?
+    var photos: [String] = []
 }
 
 struct Group: Codable, Identifiable, Hashable {

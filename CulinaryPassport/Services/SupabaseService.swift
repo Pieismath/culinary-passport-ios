@@ -54,6 +54,24 @@ final class SupabaseService {
         return try await client.from("profiles").select().eq("id", value: session.user.id).single().execute().value
     }
 
+    // ── Meal photos (single `photos` bucket, public) ─────────────────────────
+
+    /// Upload a JPEG to photos/{user_id}/{uuid}.jpg; returns the stored path.
+    func uploadPhoto(_ jpeg: Data) async throws -> String {
+        let session = try await client.auth.session
+        let path = "\(session.user.id.uuidString)/\(UUID().uuidString).jpg"
+        try await client.storage.from("photos").upload(
+            path, data: jpeg,
+            options: FileOptions(cacheControl: "3600", contentType: "image/jpeg", upsert: false)
+        )
+        return path
+    }
+
+    /// Public URL for a stored photo path (the bucket is public).
+    func photoURL(_ path: String) -> URL? {
+        try? client.storage.from("photos").getPublicURL(path: path)
+    }
+
     func updateEntry(id: UUID, _ patch: EntryUpdate) async throws {
         try await client.from("entries").update(patch).eq("id", value: id).execute()
     }
