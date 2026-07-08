@@ -13,12 +13,14 @@ struct GroupsView: View {
             List {
                 Section {
                     ForEach(groups) { group in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(group.name).font(.headline)
-                            Text("invite code: \(group.inviteCode)")
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
+                        NavigationLink(value: group) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(group.name).font(.headline)
+                                Text("invite code: \(group.inviteCode)")
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
                         }
                     }
                 } header: {
@@ -47,6 +49,7 @@ struct GroupsView: View {
                 if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
             }
             .navigationTitle("Groups")
+            .navigationDestination(for: Group.self) { GroupFeedView(group: $0) }
             .task { await reload() }
             .refreshable { await reload() }
         }

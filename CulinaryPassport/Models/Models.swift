@@ -88,8 +88,31 @@ struct PostComment: Codable, Identifiable, Hashable {
     let createdAt: Date
 }
 
+struct PostReaction: Codable, Hashable {
+    let postId: UUID
+    let userId: UUID
+    let emoji: String
+}
+
 struct Follow: Codable, Hashable {
     let followerId: UUID
     let followeeId: UUID
     let createdAt: Date
+}
+
+// Insert payloads (ids / timestamps come from Postgres defaults)
+
+struct NewGroupPost: Codable {
+    let groupId: UUID
+    let authorId: UUID
+    var entryId: UUID?
+    var text: String
+    var photos: [String] = []
+}
+
+struct NewComment: Codable {
+    let postId: UUID
+    let authorId: UUID
+    var parentId: UUID?
+    var text: String
 }

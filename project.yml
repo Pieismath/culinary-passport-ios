@@ -21,9 +21,13 @@ targets:
     dependencies:
       - package: Supabase
         product: Supabase
-    settings:
-      base:
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_NSCameraUsageDescription: "Take a selfie to generate your avatar, and snap your meals."
-        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "Attach photos of your meals."
-        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "Find restaurants serving tonight's cuisine near you."
+    info:
+      path: CulinaryPassport/Info.plist
+      properties:
+        UILaunchScreen: {}
+        NSCameraUsageDescription: "Take a selfie to generate your avatar, and snap your meals."
+        NSPhotoLibraryUsageDescription: "Attach photos of your meals."
+        NSLocationWhenInUseUsageDescription: "Find restaurants serving tonight's cuisine near you."
+        # Config.swift reads these; values come from Config.xcconfig at build time
+        SUPABASE_URL: $(SUPABASE_URL)
+        SUPABASE_ANON_KEY: $(SUPABASE_ANON_KEY)
