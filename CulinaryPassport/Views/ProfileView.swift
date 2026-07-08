@@ -8,24 +8,27 @@ struct ProfileView: View {
     @State private var pickedItem: PhotosPickerItem?
     @State private var busy = false
     @State private var status: String?
+    @State private var equipped = EquippedStore.load()
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
-                AsyncImage(url: avatarURL) { image in
-                    image.resizable().scaledToFit()
-                } placeholder: {
-                    Image(systemName: "person.crop.circle.dashed")
-                        .font(.system(size: 90))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(width: 180, height: 180)
+                // Composited with equipped accessories (ROADMAP item 17).
+                ComposedAvatarView(url: avatarURL, equipped: equipped, size: 180)
+                    .id(equipped)
 
                 PhotosPicker(selection: $pickedItem, matching: .images) {
                     Label(busy ? "Generating…" : "New selfie → new avatar", systemImage: "camera")
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(busy)
+
+                NavigationLink {
+                    AvatarCustomizeView(avatarURL: avatarURL)
+                } label: {
+                    Label("Customize avatar", systemImage: "wand.and.stars")
+                }
+                .disabled(avatarURL == nil)
 
                 if let status {
                     Text(status)
@@ -44,6 +47,7 @@ struct ProfileView: View {
             .padding()
             .navigationTitle("Profile")
             .task { await loadAvatar() }
+            .onAppear { equipped = EquippedStore.load() } // reflect customizer changes on return
             .onChange(of: pickedItem) {
                 Task { await generate() }
             }
