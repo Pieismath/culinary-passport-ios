@@ -49,6 +49,11 @@ final class SupabaseService {
         try await client.from("entries").insert(entry).execute()
     }
 
+    func myProfile() async throws -> Profile {
+        let session = try await client.auth.session
+        return try await client.from("profiles").select().eq("id", value: session.user.id).single().execute().value
+    }
+
     func deleteEntry(id: UUID) async throws {
         try await client.from("entries").delete().eq("id", value: id).execute()
     }
