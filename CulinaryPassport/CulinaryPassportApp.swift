@@ -43,9 +43,11 @@ final class SessionStore {
 
     @MainActor
     private func observeAuth() async {
+        // -noPush: headless test runs can't tap the OS permission dialog
+        let skipPush = ProcessInfo.processInfo.arguments.contains("-noPush")
         for await state in SupabaseService.shared.client.auth.authStateChanges {
             isSignedIn = state.session != nil
-            if isSignedIn { PushRegistrar.requestAndRegister() }
+            if isSignedIn && !skipPush { PushRegistrar.requestAndRegister() }
         }
     }
 }
