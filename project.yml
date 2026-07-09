@@ -31,3 +31,7 @@ targets:
         # Config.swift reads these; values come from Config.xcconfig at build time
         SUPABASE_URL: $(SUPABASE_URL)
         SUPABASE_ANON_KEY: $(SUPABASE_ANON_KEY)
+        # OAuth redirect scheme (Google web flow / any provider deep-link callback)
+        CFBundleURLTypes:
+          - CFBundleURLName: app.culinarypassport.auth
+            CFBundleURLSchemes: [culinarypassport]

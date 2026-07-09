@@ -152,6 +152,7 @@ struct EntrySheet: View {
     @State private var placeId: String?
     @State private var lat: Double?
     @State private var lng: Double?
+    @State private var visibility: Entry.Visibility = .groups
     @State private var saving = false
     @State private var error: String?
 
@@ -227,6 +228,13 @@ struct EntrySheet: View {
                 TextField("Signature dish", text: $signatureDish)
                 TextField("Notes", text: $notes, axis: .vertical)
                 Toggle("Would return?", isOn: $wouldReturn)
+
+                Picker("Who can see this", selection: $visibility) {
+                    Label("Public", systemImage: "globe").tag(Entry.Visibility.public)
+                    Label("My groups", systemImage: "person.3").tag(Entry.Visibility.groups)
+                    Label("Only me", systemImage: "lock").tag(Entry.Visibility.private)
+                }
+
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }
             }
             .navigationTitle(isEdit ? "Edit meal" : "Log a meal")
@@ -255,6 +263,7 @@ struct EntrySheet: View {
         placeId = entry.placeId
         lat = entry.lat
         lng = entry.lng
+        visibility = entry.visibility ?? .groups
         existingPhotos = entry.photos
         let fmt = DateFormatter(); fmt.dateFormat = "yyyy-MM-dd"
         if let d = fmt.date(from: entry.dateTried) { date = d }
@@ -342,7 +351,8 @@ struct EntrySheet: View {
                     placeId: placeId,
                     lat: lat,
                     lng: lng,
-                    photos: photos
+                    photos: photos,
+                    visibility: visibility.rawValue
                 ))
             case .edit(let entry):
                 try await SupabaseService.shared.updateEntry(id: entry.id, EntryUpdate(
@@ -357,7 +367,8 @@ struct EntrySheet: View {
                     placeId: placeId,
                     lat: lat,
                     lng: lng,
-                    photos: photos
+                    photos: photos,
+                    visibility: visibility.rawValue
                 ))
             }
             await onSave()

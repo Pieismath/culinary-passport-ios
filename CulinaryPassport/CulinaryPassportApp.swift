@@ -52,38 +52,4 @@ final class SessionStore {
     }
 }
 
-struct SignInView: View {
-    @Environment(SessionStore.self) private var session
-    @State private var email = ""
-    @State private var password = ""
-    @State private var error: String?
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Text("Culinary Passport")
-                .font(.system(.largeTitle, design: .serif)).italic()
-            TextField("Email", text: $email)
-                .textContentType(.emailAddress)
-                .autocapitalization(.none)
-                .textFieldStyle(.roundedBorder)
-            SecureField("Password", text: $password)
-                .textFieldStyle(.roundedBorder)
-            Button("Sign in") {
-                Task {
-                    do {
-                        try await SupabaseService.shared.client.auth.signIn(email: email, password: password)
-                    } catch { self.error = error.localizedDescription }
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            // TODO(MVP-1): Sign in with Apple
-            if let error { Text(error).font(.caption).foregroundStyle(.red) }
-            #if DEBUG
-            Button("UI preview (no backend)") { session.uiPreview = true }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            #endif
-        }
-        .padding(32)
-    }
-}
+// SignInView moved to Views/SignInView.swift (social-first sign-in).
