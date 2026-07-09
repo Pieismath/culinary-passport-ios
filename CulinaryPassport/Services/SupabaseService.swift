@@ -191,6 +191,21 @@ final class SupabaseService {
             .execute().value
     }
 
+    /// Discover feed (v1.1 item 8): recent meals from users with a public profile.
+    /// (The entries SELECT policy is currently permissive — we gate on the author's
+    /// is_public flag here so the feed respects profile privacy.)
+    func discoverFeed(limit: Int = 40) async throws -> [FeedItem] {
+        let entries: [Entry] = try await client.from("entries").select()
+            .order("created_at", ascending: false)
+            .limit(150)
+            .execute().value
+        let authorIds = Array(Set(entries.map(\.userId)))
+        let publicAuthors = (try await profiles(ids: authorIds)).filter { $0.isPublic == true }
+        let byId = Dictionary(uniqueKeysWithValues: publicAuthors.map { ($0.id, $0) })
+        return entries.compactMap { e in byId[e.userId].map { FeedItem(entry: e, author: $0) } }
+            .prefix(limit).map { $0 }
+    }
+
     func searchPublicProfiles(_ query: String) async throws -> [Profile] {
         try await client.from("profiles").select()
             .eq("is_public", value: true)

@@ -111,6 +111,13 @@ struct PostReaction: Codable, Hashable {
     let emoji: String
 }
 
+/// A discover-feed row: an entry paired with its (public) author.
+struct FeedItem: Identifiable, Hashable {
+    let entry: Entry
+    let author: Profile
+    var id: UUID { entry.id }
+}
+
 struct Follow: Codable, Hashable {
     let followerId: UUID
     let followeeId: UUID

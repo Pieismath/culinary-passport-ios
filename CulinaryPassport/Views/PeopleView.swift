@@ -1,63 +1,63 @@
 import SwiftUI
 
-/// v1.1: the social layer — search public profiles, follow / unfollow.
-/// Discover feed + suggestions come after the follow graph has data.
+/// v1.1: the social layer. Empty search shows the Discover feed (item 8); typing
+/// searches public profiles to follow (item 7).
 struct PeopleView: View {
     @State private var query = ""
     @State private var results: [Profile] = []
     @State private var following: Set<UUID> = []
+    @State private var feed: [FeedItem] = []
     @State private var status: String?
+
+    private var searching: Bool { query.trimmingCharacters(in: .whitespaces).count >= 2 }
 
     var body: some View {
         NavigationStack {
             List {
-                ForEach(results) { profile in
-                    NavigationLink {
-                        PublicProfileView(profile: profile)
-                    } label: {
-                        HStack(spacing: 12) {
-                            AsyncImage(url: profile.avatarUrl.flatMap(URL.init)) { image in
-                                image.resizable().scaledToFill()
-                            } placeholder: {
-                                Image(systemName: "person.crop.circle.fill")
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(width: 40, height: 40)
-                            .clipShape(Circle())
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(profile.name).font(.headline)
-                                if let username = profile.username {
-                                    Text("@\(username)").font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer()
-                            let follows = following.contains(profile.id)
-                            Button(follows ? "Following" : "Follow") {
-                                Task { await toggle(profile.id, to: !follows) }
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(follows ? .secondary : .accentColor)
+                if searching {
+                    ForEach(results) { profile in
+                        NavigationLink {
+                            PublicProfileView(profile: profile)
+                        } label: {
+                            PersonRow(
+                                profile: profile,
+                                following: following.contains(profile.id),
+                                onToggle: { follow in Task { await toggle(profile.id, to: follow) } }
+                            )
+                        }
+                    }
+                } else {
+                    Section("Discover") {
+                        ForEach(feed) { item in
+                            FeedRow(item: item)
                         }
                     }
                 }
                 if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
             }
             .overlay {
-                if results.isEmpty {
+                if searching && results.isEmpty {
                     ContentUnavailableView(
-                        "Find your people",
+                        "No one found",
                         systemImage: "person.2",
                         description: Text("Search by name or username. Public profiles only.")
+                    )
+                } else if !searching && feed.isEmpty {
+                    ContentUnavailableView(
+                        "Nothing to discover yet",
+                        systemImage: "sparkles",
+                        description: Text("Public meals from the community will show up here.")
                     )
                 }
             }
             .searchable(text: $query, prompt: "Name or username")
-            .onChange(of: query) {
-                Task { await search() }
-            }
+            .onChange(of: query) { Task { await search() } }
             .navigationTitle("People")
-            .task { following = (try? await SupabaseService.shared.following()) ?? [] }
+            .task {
+                following = (try? await SupabaseService.shared.following()) ?? []
+                feed = (try? await SupabaseService.shared.discoverFeed()) ?? []
+            }
+            .refreshable { feed = (try? await SupabaseService.shared.discoverFeed()) ?? [] }
         }
     }
 
@@ -73,5 +73,82 @@ struct PeopleView: View {
             try await SupabaseService.shared.setFollowing(userId, follow)
             if follow { following.insert(userId) } else { following.remove(userId) }
         } catch { status = error.localizedDescription }
+    }
+}
+
+private struct PersonRow: View {
+    let profile: Profile
+    let following: Bool
+    let onToggle: (Bool) -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            AsyncImage(url: profile.avatarUrl.flatMap(URL.init)) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                Image(systemName: "person.crop.circle.fill").foregroundStyle(.secondary)
+            }
+            .frame(width: 40, height: 40)
+            .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(profile.name).font(.headline)
+                if let username = profile.username {
+                    Text("@\(username)").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            Button(following ? "Following" : "Follow") { onToggle(!following) }
+                .buttonStyle(.bordered)
+                .tint(following ? .secondary : .accentColor)
+        }
+    }
+}
+
+/// One discover-feed meal: author, cuisine, restaurant, rating, optional photo.
+private struct FeedRow: View {
+    let item: FeedItem
+
+    private var country: Country? { CountryStore.byCode[item.entry.countryCode] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                AsyncImage(url: item.author.avatarUrl.flatMap(URL.init)) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Image(systemName: "person.crop.circle.fill").foregroundStyle(.secondary)
+                }
+                .frame(width: 32, height: 32)
+                .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.author.name).font(.subheadline).bold()
+                    Text("\(country?.flagEmoji ?? "🌍") \(country?.cuisineName ?? item.entry.countryCode) · \(item.entry.dateTried)")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(String(repeating: "★", count: item.entry.rating))
+                    .font(.caption).foregroundStyle(.orange)
+            }
+
+            if let first = item.entry.photos.first, let url = SupabaseService.shared.photoURL(first) {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Color(.secondarySystemBackground)
+                }
+                .frame(height: 160)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+
+            Text(item.entry.restaurantName)
+                .font(.subheadline)
+            if let city = item.entry.city, !city.isEmpty {
+                Text(city).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }

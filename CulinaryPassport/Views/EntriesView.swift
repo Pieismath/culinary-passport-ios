@@ -4,13 +4,52 @@ import PhotosUI
 /// MVP step 3: personal entries — list, add, edit, delete, with photos. Restaurant
 /// field is backed by Google Places autocomplete through the places-proxy function.
 struct EntriesView: View {
+    enum Mode: String, CaseIterable { case list = "List", timeline = "Timeline", map = "Map" }
+
     @State private var entries: [Entry] = []
+    @State private var mode: Mode = EntriesView.initialMode
     @State private var showAdd = false
+
+    /// Headless test hook: `-journalMode timeline|map` opens that view.
+    private static var initialMode: Mode {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-journalMode"), i + 1 < args.count,
+           let m = Mode(rawValue: args[i + 1].capitalized) { return m }
+        #endif
+        return .list
+    }
     @State private var editing: Entry?
     @State private var error: String?
 
     var body: some View {
         NavigationStack {
+            content
+                .navigationTitle("Journal")
+                .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        Picker("View", selection: $mode) {
+                            ForEach(Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { showAdd = true } label: { Image(systemName: "plus") }
+                    }
+                }
+                .sheet(isPresented: $showAdd) {
+                    EntrySheet(mode: .add) { await reload() }
+                }
+                .sheet(item: $editing) { entry in
+                    EntrySheet(mode: .edit(entry)) { await reload() }
+                }
+                .task { await reload() }
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch mode {
+        case .list:
             List {
                 ForEach(entries) { entry in
                     Button { editing = entry } label: {
@@ -31,19 +70,14 @@ struct EntriesView: View {
                     )
                 }
             }
-            .navigationTitle("Journal")
-            .toolbar {
-                Button { showAdd = true } label: { Image(systemName: "plus") }
-            }
-            .sheet(isPresented: $showAdd) {
-                EntrySheet(mode: .add) { await reload() }
-            }
-            .sheet(item: $editing) { entry in
-                EntrySheet(mode: .edit(entry)) { await reload() }
-            }
-            .task { await reload() }
             .refreshable { await reload() }
-            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            .overlay(alignment: .bottom) {
+                if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            }
+        case .timeline:
+            TimelineView(entries: entries)
+        case .map:
+            PhotoMapView(entries: entries)
         }
     }
 
