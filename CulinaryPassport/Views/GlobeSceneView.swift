@@ -10,7 +10,8 @@ struct GlobeSceneView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            GlobeScene(vm: vm, selectedCode: $selectedCode)
+            GlobeCanvas(color: { code, selected in vm.color(for: code, selected: selected) },
+                        selected: $selectedCode)
                 .ignoresSafeArea()
 
             if vm.loading {
@@ -40,92 +41,6 @@ struct GlobeSceneView: View {
 }
 
 // MARK: - SceneKit bridge
-
-private struct GlobeScene: UIViewRepresentable {
-    @ObservedObject var vm: GlobeViewModel
-    @Binding var selectedCode: String?
-
-    func makeCoordinator() -> Coordinator { Coordinator(selectedCode: $selectedCode) }
-
-    func makeUIView(context: Context) -> SCNView {
-        let view = SCNView()
-        view.scene = buildScene(into: context.coordinator)
-        view.backgroundColor = UIColor(red: 0.96, green: 0.95, blue: 0.92, alpha: 1) // paper
-        view.allowsCameraControl = true
-        view.antialiasingMode = .multisampling2X
-        view.pointOfView = context.coordinator.cameraNode
-
-        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
-        view.addGestureRecognizer(tap)
-        context.coordinator.scnView = view
-        return view
-    }
-
-    func updateUIView(_ view: SCNView, context: Context) {
-        // Recolor whenever status loads or the selection changes.
-        for (code, node) in context.coordinator.countryNodes {
-            node.geometry?.firstMaterial?.diffuse.contents = vm.color(for: code, selected: code == selectedCode)
-        }
-    }
-
-    private func buildScene(into coordinator: Coordinator) -> SCNScene {
-        let scene = SCNScene()
-
-        // Ocean sphere.
-        let ocean = SCNSphere(radius: CGFloat(GlobeNodeFactory.oceanRadius))
-        ocean.segmentCount = 96
-        ocean.firstMaterial?.diffuse.contents = UIColor(red: 0.85, green: 0.89, blue: 0.92, alpha: 1)
-        ocean.firstMaterial?.lightingModel = .constant
-        scene.rootNode.addChildNode(SCNNode(geometry: ocean))
-
-        // Country caps.
-        for country in CountryStore.all {
-            let color = vm.color(for: country.code, selected: false)
-            if let node = GlobeNodeFactory.countryNode(code: country.code, color: color) {
-                coordinator.countryNodes[country.code] = node
-                scene.rootNode.addChildNode(node)
-            }
-        }
-
-        // Camera.
-        let camera = SCNCamera()
-        camera.fieldOfView = 40
-        let cam = SCNNode()
-        cam.camera = camera
-        cam.position = SCNVector3(0, 0, 3.2)
-        scene.rootNode.addChildNode(cam)
-        coordinator.cameraNode = cam
-
-        return scene
-    }
-
-    final class Coordinator: NSObject {
-        var countryNodes: [String: SCNNode] = [:]
-        var cameraNode = SCNNode()
-        weak var scnView: SCNView?
-        private var selectedCode: Binding<String?>
-
-        init(selectedCode: Binding<String?>) { self.selectedCode = selectedCode }
-
-        @objc func handleTap(_ gesture: UITapGestureRecognizer) {
-            guard let view = scnView else { return }
-            let point = gesture.location(in: view)
-            let hits = view.hitTest(point, options: [SCNHitTestOption.searchMode: SCNHitTestSearchMode.closest.rawValue])
-            // Walk up to the first node carrying a country code.
-            for hit in hits {
-                var node: SCNNode? = hit.node
-                while let n = node {
-                    if let code = n.name, code.count == 2 {
-                        selectedCode.wrappedValue = (selectedCode.wrappedValue == code) ? nil : code
-                        return
-                    }
-                    node = n.parent
-                }
-            }
-            selectedCode.wrappedValue = nil // tapped the ocean
-        }
-    }
-}
 
 // MARK: - Detail panel
 

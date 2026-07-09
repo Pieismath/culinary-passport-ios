@@ -96,6 +96,19 @@ final class SupabaseService {
         try await client.rpc("join_group_by_invite", params: ["code": inviteCode]).execute().value
     }
 
+    func groupMemberIds(groupId: UUID) async throws -> [UUID] {
+        let rows: [GroupMember] = try await client.from("group_members").select()
+            .eq("group_id", value: groupId).execute().value
+        return rows.map(\.userId)
+    }
+
+    /// Entries for a set of users (RLS returns only what the caller may read —
+    /// for co-members that includes each other's group-shared + public entries).
+    func entriesForUsers(_ ids: [UUID]) async throws -> [Entry] {
+        guard !ids.isEmpty else { return [] }
+        return try await client.from("entries").select().in("user_id", values: ids).execute().value
+    }
+
     // ── Group feed (v1.2) ────────────────────────────────────────────────────
 
     func feedPosts(groupId: UUID) async throws -> [GroupPost] {

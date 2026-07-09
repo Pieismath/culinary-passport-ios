@@ -36,6 +36,15 @@ struct GroupFeedView: View {
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
         }
         .navigationTitle(group.name)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                NavigationLink {
+                    GroupGlobeView(group: group)
+                } label: {
+                    Image(systemName: "globe.americas")
+                }
+            }
+        }
         .task { await reload() }
         .refreshable { await reload() }
     }
