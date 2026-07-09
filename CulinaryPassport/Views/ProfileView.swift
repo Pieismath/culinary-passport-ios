@@ -48,6 +48,12 @@ struct ProfileView: View {
                     Label("Edit profile", systemImage: "pencil")
                 }
 
+                NavigationLink {
+                    WrappedView()
+                } label: {
+                    Label("Year in review", systemImage: "sparkles")
+                }
+
                 if let status {
                     Text(status)
                         .font(.caption)

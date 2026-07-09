@@ -138,6 +138,8 @@ struct EntrySheet: View {
     }
 
     let mode: Mode
+    /// Preselect a cuisine on a fresh log (used by the dinner picker).
+    var presetCountryCode: String? = nil
     var onSave: () async -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -252,7 +254,11 @@ struct EntrySheet: View {
     }
 
     private func prefill() {
-        guard case .edit(let entry) = mode else { return }
+        guard case .edit(let entry) = mode else {
+            // Fresh log: honor a preset cuisine from the dinner picker.
+            if let code = presetCountryCode { country = CountryStore.byCode[code] }
+            return
+        }
         country = CountryStore.byCode[entry.countryCode]
         restaurantName = entry.restaurantName
         city = entry.city ?? ""

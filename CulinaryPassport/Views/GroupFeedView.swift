@@ -37,7 +37,12 @@ struct GroupFeedView: View {
         }
         .navigationTitle(group.name)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                NavigationLink {
+                    SyncedMealsView(group: group)
+                } label: {
+                    Image(systemName: "heart")
+                }
                 NavigationLink {
                     GroupGlobeView(group: group)
                 } label: {

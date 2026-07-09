@@ -7,12 +7,28 @@ import SceneKit
 struct GlobeSceneView: View {
     @StateObject private var vm = GlobeViewModel()
     @State private var selectedCode: String?
+    @State private var showDinnerPicker = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
             GlobeCanvas(color: { code, selected in vm.color(for: code, selected: selected) },
                         selected: $selectedCode)
                 .ignoresSafeArea()
+
+            // "What should we eat tonight?" — the dinner picker (v1.3 item 15).
+            Button {
+                showDinnerPicker = true
+            } label: {
+                Image(systemName: "dice.fill")
+                    .font(.title2)
+                    .padding(14)
+                    .background(.regularMaterial, in: Circle())
+                    .shadow(radius: 4, y: 2)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .padding(.trailing, 20)
+            .padding(.top, 12)
+            .sheet(isPresented: $showDinnerPicker) { DinnerPickerView() }
 
             if vm.loading {
                 ProgressView().padding(.bottom, 40)
