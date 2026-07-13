@@ -84,9 +84,17 @@ struct ProfileView: View {
     }
 
     private func loadAvatar() async {
-        guard let me = try? await SupabaseService.shared.myProfile() else { return }
-        profile = me
-        if let urlString = me.avatarUrl { avatarURL = URL(string: urlString) }
+        do {
+            guard let me = try await SupabaseService.shared.myProfile() else {
+                // Profile row is gone (deleted user / stale session) — sign out.
+                await SupabaseService.shared.signOut()
+                return
+            }
+            profile = me
+            if let urlString = me.avatarUrl { avatarURL = URL(string: urlString) }
+        } catch {
+            // Transient load failure — leave the screen as-is (don't sign out).
+        }
     }
 
     private func generate() async {

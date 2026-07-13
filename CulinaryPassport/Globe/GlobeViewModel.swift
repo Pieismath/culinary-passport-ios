@@ -47,7 +47,12 @@ final class GlobeViewModel: ObservableObject {
             // anything shared). Enough to color a personal globe; group/together
             // views layer on top later.
             let entries = try await SupabaseService.shared.myEntries()
-            let me = try await SupabaseService.shared.myProfile()
+            guard let me = try await SupabaseService.shared.myProfile() else {
+                // Profile row is gone (deleted user / stale session) — sign out
+                // cleanly rather than surfacing an error on the globe.
+                await SupabaseService.shared.signOut()
+                return
+            }
 
             var status: [String: Set<UUID>] = [:]
             var byCountry: [String: [Entry]] = [:]

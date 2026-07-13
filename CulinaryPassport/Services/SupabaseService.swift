@@ -49,9 +49,21 @@ final class SupabaseService {
         try await client.from("entries").insert(entry).execute()
     }
 
-    func myProfile() async throws -> Profile {
+    /// Current user's profile, or nil if the row is gone (deleted user / stale
+    /// session). Fetched as an array + `.first` rather than `.single()`, so a
+    /// missing row returns nil instead of throwing a coercion error that would
+    /// break the globe and profile screens. Callers should sign out on nil.
+    func myProfile() async throws -> Profile? {
         let session = try await client.auth.session
-        return try await client.from("profiles").select().eq("id", value: session.user.id).single().execute().value
+        let rows: [Profile] = try await client.from("profiles")
+            .select().eq("id", value: session.user.id).limit(1).execute().value
+        return rows.first
+    }
+
+    /// Sign the current user out (routes the app back to the sign-in screen via
+    /// the auth state observer). Used when the profile row has vanished.
+    func signOut() async {
+        try? await client.auth.signOut()
     }
 
     // ── Meal photos (single `photos` bucket, public) ─────────────────────────
@@ -107,6 +119,14 @@ final class SupabaseService {
     func entriesForUsers(_ ids: [UUID]) async throws -> [Entry] {
         guard !ids.isEmpty else { return [] }
         return try await client.from("entries").select().in("user_id", values: ids).execute().value
+    }
+
+    /// A single entry by id, or nil if it isn't visible to the caller / was
+    /// deleted. Used to render linked meal cards in the group feed.
+    func entry(id: UUID) async throws -> Entry? {
+        let rows: [Entry] = try await client.from("entries")
+            .select().eq("id", value: id).limit(1).execute().value
+        return rows.first
     }
 
     // ── Group feed (v1.2) ────────────────────────────────────────────────────
@@ -204,11 +224,21 @@ final class SupabaseService {
             .execute().value
     }
 
-    /// Discover feed (v1.1 item 8): recent meals from users with a public profile.
-    /// (The entries SELECT policy is currently permissive — we gate on the author's
-    /// is_public flag here so the feed respects profile privacy.)
+    /// Discover feed (v1.1 item 8): recent *public* meals from users with a
+    /// public profile.
+    ///
+    /// Entry privacy now lives in the DB: we ask only for `visibility = public`
+    /// rows (the entries SELECT policy also permits own/group-shared rows, but we
+    /// don't want those in discover), so no private/group meals are fetched and
+    /// discarded client-side.
+    ///
+    /// The author `isPublic` filter stays and is *not* redundant: the profiles
+    /// SELECT policy intentionally also returns group co-members' rows (private or
+    /// not) so the group globe/feed can render them — this filter keeps discover
+    /// limited to genuinely public profiles.
     func discoverFeed(limit: Int = 40) async throws -> [FeedItem] {
         let entries: [Entry] = try await client.from("entries").select()
+            .eq("visibility", value: "public")
             .order("created_at", ascending: false)
             .limit(150)
             .execute().value

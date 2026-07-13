@@ -197,9 +197,47 @@ enum GlobeNodeFactory {
     private static let dropChord: Float = 1.2
     private static let maxDepth = 6
 
+    /// The tessellated mesh for a country (immutable, colorless). Reused across
+    /// every globe instance so the ear-clip + subdivision runs once per country.
+    private typealias Mesh = (source: SCNGeometrySource, element: SCNGeometryElement)
+
+    /// Country geometry is identical for every user/globe, but ear-clipping +
+    /// depth-6 subdivision of all 174 countries is expensive, so we build each
+    /// mesh once and cache it. Keyed entries can be nil for countries with no
+    /// usable geometry so we don't retry them. (Access is main-thread only —
+    /// buildScene runs in makeUIView — so a plain static dictionary is safe.)
+    private static var meshCache: [String: Mesh?] = [:]
+
     /// A single SCNNode holding all of a country's filled polygon caps, tinted.
-    /// Returns nil if the country has no usable geometry.
+    /// Returns nil if the country has no usable geometry. The heavy mesh is cached
+    /// (see `meshCache`); only a lightweight SCNGeometry + material is built per
+    /// call, so re-entering a globe view is cheap.
     static func countryNode(code: String, color: UIColor) -> SCNNode? {
+        let mesh: Mesh?
+        if let cached = meshCache[code] {
+            mesh = cached                      // may be nil: known-empty country
+        } else {
+            mesh = buildMesh(code: code)
+            meshCache[code] = mesh
+        }
+        guard let mesh else { return nil }
+
+        let geometry = SCNGeometry(sources: [mesh.source], elements: [mesh.element])
+        let material = SCNMaterial()
+        material.diffuse.contents = color
+        material.isDoubleSided = true          // rings may wind either way after projection
+        material.lightingModel = .constant     // flat, map-like fill (no shading falloff)
+        material.writesToDepthBuffer = true
+        geometry.materials = [material]
+
+        let node = SCNNode(geometry: geometry)
+        node.name = code                       // hit-testing reads this back
+        return node
+    }
+
+    /// Ear-clip + subdivide a country's rings into a reusable SCNGeometry mesh.
+    /// nil if the country has no usable geometry.
+    private static func buildMesh(code: String) -> Mesh? {
         guard let rings = CountryGeometry.rings[code], !rings.isEmpty else { return nil }
 
         var vertices: [SCNVector3] = []
@@ -225,18 +263,7 @@ enum GlobeNodeFactory {
 
         let source = SCNGeometrySource(vertices: vertices)
         let element = SCNGeometryElement(indices: indices, primitiveType: .triangles)
-        let geometry = SCNGeometry(sources: [source], elements: [element])
-
-        let material = SCNMaterial()
-        material.diffuse.contents = color
-        material.isDoubleSided = true          // rings may wind either way after projection
-        material.lightingModel = .constant     // flat, map-like fill (no shading falloff)
-        material.writesToDepthBuffer = true
-        geometry.materials = [material]
-
-        let node = SCNNode(geometry: geometry)
-        node.name = code                       // hit-testing reads this back
-        return node
+        return (source, element)
     }
 
     /// Recursively split triangle a-b-c into 4 until every edge is short enough to

@@ -90,6 +90,7 @@ private struct PostRow: View {
     let onReact: (String, Bool) -> Void
 
     @State private var showComments = false
+    @State private var linkedEntry: Entry?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -100,8 +101,8 @@ private struct PostRow: View {
                     .font(.caption2).foregroundStyle(.secondary)
             }
             if !post.text.isEmpty { Text(post.text) }
-            // TODO(v1.2): entry cards — when post.entryId != nil render the meal
-            // ("Mom tried her first Ethiopian → Meskerem, ★★★★★") + "Save to want-to-try"
+            // When the post links a logged meal, show a compact card for it.
+            if let entry = linkedEntry { LinkedMealCard(entry: entry) }
 
             HStack(spacing: 6) {
                 ForEach(quickEmoji, id: \.self) { emoji in
@@ -129,6 +130,50 @@ private struct PostRow: View {
         }
         .padding(.vertical, 4)
         .sheet(isPresented: $showComments) { CommentsSheet(post: post) }
+        .task(id: post.entryId) {
+            guard let entryId = post.entryId else { linkedEntry = nil; return }
+            linkedEntry = try? await SupabaseService.shared.entry(id: entryId)
+        }
+    }
+}
+
+/// Compact card for a meal a post links to — flag/photo, restaurant, cuisine,
+/// rating. Mirrors EntryRow's styling in a boxed, feed-friendly form.
+private struct LinkedMealCard: View {
+    let entry: Entry
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if let first = entry.photos.first, let url = SupabaseService.shared.photoURL(first) {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Color(.secondarySystemBackground)
+                }
+                .frame(width: 40, height: 40)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(alignment: .bottomTrailing) {
+                    Text(CountryStore.byCode[entry.countryCode]?.flagEmoji ?? "🌍")
+                        .font(.caption2)
+                }
+            } else {
+                Text(CountryStore.byCode[entry.countryCode]?.flagEmoji ?? "🌍")
+                    .font(.title2)
+                    .frame(width: 40, height: 40)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.restaurantName).font(.subheadline.bold())
+                Text(CountryStore.byCode[entry.countryCode]?.cuisineName ?? entry.countryCode)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(String(repeating: "★", count: entry.rating))
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+        .padding(8)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
