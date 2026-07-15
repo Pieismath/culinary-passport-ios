@@ -50,8 +50,8 @@ private struct PinView: View {
             Circle().fill(.background).frame(width: 40, height: 40)
                 .overlay(Circle().stroke(Color.accentColor, lineWidth: 2))
                 .shadow(radius: 2)
-            if let first = entry.photos.first, let url = SupabaseService.shared.photoURL(first) {
-                AsyncImage(url: url) { image in
+            if let first = entry.photos.first {
+                SignedPhotoImage(path: first) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
                     Text(country?.flagEmoji ?? "🍽️")
@@ -82,15 +82,13 @@ private struct MealDetailCard: View {
                     Label(dish, systemImage: "fork.knife")
                 }
                 ForEach(entry.photos, id: \.self) { path in
-                    if let url = SupabaseService.shared.photoURL(path) {
-                        AsyncImage(url: url) { image in
-                            image.resizable().scaledToFill()
-                        } placeholder: {
-                            Color(.secondarySystemBackground)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 200)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    SignedPhotoImage(path: path) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        Color(.secondarySystemBackground)
                     }
+                    .frame(maxWidth: .infinity, minHeight: 200)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 if let notes = entry.notes, !notes.isEmpty {
                     Text(notes).font(.body)

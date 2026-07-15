@@ -99,8 +99,8 @@ struct EntryRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            if let first = entry.photos.first, let url = SupabaseService.shared.photoURL(first) {
-                AsyncImage(url: url) { image in
+            if let first = entry.photos.first {
+                SignedPhotoImage(path: first) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
                     Color(.secondarySystemBackground)
@@ -205,7 +205,7 @@ struct EntrySheet: View {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
                                 ForEach(existingPhotos, id: \.self) { path in
-                                    PhotoThumb(url: SupabaseService.shared.photoURL(path)) {
+                                    PhotoThumb(path: path) {
                                         existingPhotos.removeAll { $0 == path }
                                     }
                                 }
@@ -388,7 +388,7 @@ struct EntrySheet: View {
 // MARK: - Photo helpers
 
 private struct PhotoThumb: View {
-    var url: URL? = nil
+    var path: String? = nil
     var image: UIImage? = nil
     let onRemove: () -> Void
 
@@ -397,10 +397,12 @@ private struct PhotoThumb: View {
             SwiftUI.Group {
                 if let image {
                     Image(uiImage: image).resizable().scaledToFill()
-                } else {
-                    AsyncImage(url: url) { $0.resizable().scaledToFill() } placeholder: {
+                } else if let path {
+                    SignedPhotoImage(path: path) { $0.resizable().scaledToFill() } placeholder: {
                         Color(.secondarySystemBackground)
                     }
+                } else {
+                    Color(.secondarySystemBackground)
                 }
             }
             .frame(width: 64, height: 64)

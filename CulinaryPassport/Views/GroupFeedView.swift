@@ -1,7 +1,9 @@
 import SwiftUI
+import Supabase
 
 /// v1.2: the group feed — posts, emoji reactions, comments.
-/// Realtime subscription lands after the basics prove out; pull-to-refresh for now.
+/// Live-updating: a realtime channel on the three feed tables reloads the
+/// feed in place (pull-to-refresh stays as the manual fallback).
 struct GroupFeedView: View {
     let group: Group
 
@@ -11,6 +13,7 @@ struct GroupFeedView: View {
     @State private var myId: UUID?
     @State private var composerText = ""
     @State private var error: String?
+    @State private var reloadDebounce: Task<Void, Never>?
 
     private let quickEmoji = ["😋", "🔥", "❤️", "😂"]
 
@@ -51,9 +54,53 @@ struct GroupFeedView: View {
             }
         }
         .task { await reload() }
+        .task { await listenForChanges() }
         .refreshable { await reload() }
     }
 
+    /// Finding 7: subscribe to the feed tables and reload in place. Posts are
+    /// filtered to this group server-side; comments/reactions carry no
+    /// group_id column to filter on, so any event just debounce-reloads (RLS
+    /// already scopes what we receive to groups we belong to). The `.task`
+    /// modifier cancels on disappear, which ends the streams and tears the
+    /// channel down.
+    private func listenForChanges() async {
+        let client = SupabaseService.shared.client
+        let channel = client.channel("group-feed-\(group.id.uuidString)")
+        let postEvents = channel.postgresChange(
+            AnyAction.self, schema: "public", table: "group_posts",
+            filter: .eq("group_id", value: group.id.uuidString)
+        )
+        let commentEvents = channel.postgresChange(AnyAction.self, schema: "public", table: "post_comments")
+        let reactionEvents = channel.postgresChange(AnyAction.self, schema: "public", table: "post_reactions")
+        do {
+            try await channel.subscribeWithError()
+        } catch {
+            // No realtime → the feed still works via pull-to-refresh.
+            await client.removeChannel(channel)
+            return
+        }
+
+        await withTaskGroup(of: Void.self) { tasks in
+            tasks.addTask { for await _ in postEvents { await reloadSoon() } }
+            tasks.addTask { for await _ in commentEvents { await reloadSoon() } }
+            tasks.addTask { for await _ in reactionEvents { await reloadSoon() } }
+        }
+        await client.removeChannel(channel)
+    }
+
+    /// Collapse event bursts (a post + its auto-reactions) into one reload.
+    @MainActor
+    private func reloadSoon() {
+        reloadDebounce?.cancel()
+        reloadDebounce = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            await reload()
+        }
+    }
+
+    @MainActor
     private func reload() async {
         do {
             myId = try? await SupabaseService.shared.client.auth.session.user.id
@@ -144,8 +191,8 @@ private struct LinkedMealCard: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            if let first = entry.photos.first, let url = SupabaseService.shared.photoURL(first) {
-                AsyncImage(url: url) { image in
+            if let first = entry.photos.first {
+                SignedPhotoImage(path: first) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
                     Color(.secondarySystemBackground)

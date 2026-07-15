@@ -132,8 +132,8 @@ private struct FeedRow: View {
                     .font(.caption).foregroundStyle(.orange)
             }
 
-            if let first = item.entry.photos.first, let url = SupabaseService.shared.photoURL(first) {
-                AsyncImage(url: url) { image in
+            if let first = item.entry.photos.first {
+                SignedPhotoImage(path: first) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
                     Color(.secondarySystemBackground)

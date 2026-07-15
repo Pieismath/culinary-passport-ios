@@ -4,9 +4,9 @@ Native SwiftUI client for Culinary Passport. The web app (`../culinary-passport`
 is the prototype and stays live as the marketing/landing page; this is the real
 product: globe, camera flows, haptics, share sheets.
 
-**Backend is shared** — same Supabase project as the web app. Run both SQL files
-from the web repo (`supabase/schema.sql`, then `supabase/social-schema.sql`) and
-deploy the `generate-avatar` edge function before building social features here.
+**Backend is shared** — same Supabase project as the web app. Schema lives in
+the web repo as ordered migrations (`supabase/migrations/`, see its
+`supabase/README.md`); edge functions deploy from there too.
 
 ## Project setup
 
@@ -27,23 +27,27 @@ fill in your Supabase URL + anon key.
 
 ## Where things stand
 
-Working scaffold — auth-gated tab shell with:
-- **Journal**: entries list / add / delete wired to Supabase (country picker from the
-  bundled Natural Earth data, same demonym + rare-find logic as the web app)
-- **Groups**: list, create (owner-seeded), join by invite code (`join_group_by_invite` RPC)
-- **Profile**: PhotosPicker selfie → Vision face-crop → `generate-avatar` edge function
-  → avatar display (server enforces the 3/day limit)
-- **Globe**: SceneKit placeholder sphere; polygon port is MVP step 2
+MVP → v1.3 is built (see `docs/ROADMAP.md` for per-item status):
+- **Globe**: real Natural Earth polygons triangulated onto the SceneKit sphere,
+  mesh-cached; personal globe + three-lens group globe
+- **Journal**: entries CRUD with photos (private bucket, signed-URL rendering
+  via `PhotoSigning.swift`), per-entry visibility (public / groups / private)
+  enforced by RLS
+- **Social**: Apple + Google + email sign-in, public profiles, follows,
+  discover feed, timeline, photo map
+- **Groups**: create / invite-code join, live feed (realtime subscription +
+  pull-to-refresh) with reactions and comments, synced meals, group globe
+- **Retention**: dinner picker, avatar accessories, Yearly Wrapped
+- **Avatar**: PhotosPicker selfie → Vision face-crop → `generate-avatar` edge
+  function → composited accessories (server enforces the 3/day limit)
 
-Restaurant autocomplete on iOS goes through the `places-proxy` edge function
-(web repo) — never embed a Places key in the binary.
+Still open: **push notifications** (ROADMAP item 14) — token registration works,
+but APNs delivery, notification handling, and the push entitlement are gated on
+a paid Apple Developer account (which real Apple Sign-In needs too).
 
-See `docs/ROADMAP.md` for the ordered build plan (MVP → v1.3), which mirrors the
-productization spec in the web repo.
-
-**Before investing further: run the avatar de-risk test** —
-`node ../culinary-passport/scripts/avatar-style-test.mjs` with ~5 selfies.
-The iOS build is a go only if the outputs feel like a matched set.
+Restaurant autocomplete goes through the `places-proxy` edge function (web
+repo), which requires a signed-in user's JWT — never embed a Places key in the
+binary.
 
 ## Repo layout
 
@@ -55,7 +59,8 @@ CulinaryPassport/
   Models/Models.swift          Entry, Profile, Group, GroupPost, Follow — mirror the SQL schema
   Services/SupabaseService.swift   shared client + data access
   Services/AvatarService.swift     selfie → generate-avatar edge function
+  Services/PhotoSigning.swift      signed-URL cache + SignedPhotoImage view
   Views/RootView.swift         tab shell (Globe / Journal / Groups / Profile)
-  Views/GlobeSceneView.swift   SceneKit globe placeholder (port of the web globe)
-docs/ROADMAP.md                ordered build plan
+  Globe/                       polygon tessellation + SceneKit globe
+docs/ROADMAP.md                ordered build plan with status
 ```

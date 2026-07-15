@@ -66,9 +66,11 @@ final class SupabaseService {
         try? await client.auth.signOut()
     }
 
-    // ── Meal photos (single `photos` bucket, public) ─────────────────────────
+    // ── Meal photos (private `photos` bucket — render via SignedPhotoImage) ──
 
     /// Upload a JPEG to photos/{user_id}/{uuid}.jpg; returns the stored path.
+    /// Reads go through PhotoURLCache / SignedPhotoImage (signed, expiring
+    /// URLs) — the bucket is private and gated on entry visibility.
     func uploadPhoto(_ jpeg: Data) async throws -> String {
         let session = try await client.auth.session
         let path = "\(session.user.id.uuidString)/\(UUID().uuidString).jpg"
@@ -77,11 +79,6 @@ final class SupabaseService {
             options: FileOptions(cacheControl: "3600", contentType: "image/jpeg", upsert: false)
         )
         return path
-    }
-
-    /// Public URL for a stored photo path (the bucket is public).
-    func photoURL(_ path: String) -> URL? {
-        try? client.storage.from("photos").getPublicURL(path: path)
     }
 
     func updateEntry(id: UUID, _ patch: EntryUpdate) async throws {
