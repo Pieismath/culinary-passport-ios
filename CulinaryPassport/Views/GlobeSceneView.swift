@@ -7,9 +7,10 @@ import SceneKit
 struct GlobeSceneView: View {
     @StateObject private var vm = GlobeViewModel()
     @State private var selectedCode: String?
-    @State private var spinTarget: GlobeCanvas.SpinRequest?
-    @State private var spinning = false
+    @State private var focusTarget: GlobeCanvas.FocusRequest?
+    @State private var focusing = false
     @State private var logCountry: Country?
+    @State private var showSearch = false
     @Environment(\.openURL) private var openURL
 
     var body: some View {
@@ -19,10 +20,10 @@ struct GlobeSceneView: View {
             GlobeCanvas(
                 color: { code, selected in vm.color(for: code, selected: selected) },
                 selected: $selectedCode,
-                spinTo: $spinTarget,
-                onSpinLanded: { code in
-                    spinning = false
-                    spinTarget = nil
+                focusOn: $focusTarget,
+                onFocusLanded: { code in
+                    focusing = false
+                    focusTarget = nil
                     selectedCode = code
                 },
                 onLongPress: { code in
@@ -49,20 +50,41 @@ struct GlobeSceneView: View {
             }
         }
         .overlay(alignment: .topLeading) { progressChips.padding(.leading, 16) }
-        .overlay(alignment: .topTrailing) { spinButton.padding(.trailing, 20).padding(.top, 8) }
+        .overlay(alignment: .topTrailing) {
+            VStack(spacing: 12) {
+                spinButton
+                searchButton
+            }
+            .padding(.trailing, 20)
+            .padding(.top, 8)
+        }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selectedCode)
         .task { await vm.load() }
         #if DEBUG
-        // Headless smoke test: `-spin` runs the dice flow once after launch.
+        // Headless smoke tests: `-spin` runs the dice flow; `-fly XX` flies to
+        // a country code the way a search pick does; `-search` opens the sheet.
         .task {
-            guard ProcessInfo.processInfo.arguments.contains("-spin") else { return }
-            try? await Task.sleep(for: .seconds(2))
-            spinGlobe()
+            let args = ProcessInfo.processInfo.arguments
+            if args.contains("-spin") {
+                try? await Task.sleep(for: .seconds(2))
+                spinGlobe()
+            } else if let i = args.firstIndex(of: "-fly"), i + 1 < args.count {
+                try? await Task.sleep(for: .seconds(2))
+                flyTo(code: args[i + 1])
+            } else if args.contains("-search") {
+                try? await Task.sleep(for: .seconds(1.5))
+                showSearch = true
+            }
         }
         #endif
         .sheet(item: $logCountry) { country in
             EntrySheet(mode: .add, presetCountryCode: country.code) {
                 await vm.load()
+            }
+        }
+        .sheet(isPresented: $showSearch) {
+            CountrySearchSheet(tried: Set(vm.statusByCountry.keys)) { country in
+                flyTo(code: country.code)
             }
         }
         .overlay(alignment: .top) {
@@ -95,13 +117,27 @@ struct GlobeSceneView: View {
         } label: {
             Image(systemName: "dice.fill")
                 .font(.title2)
-                .symbolEffect(.pulse, isActive: spinning)
+                .symbolEffect(.pulse, isActive: focusing)
                 .padding(14)
                 .background(.regularMaterial, in: Circle())
                 .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
         }
-        .disabled(spinning)
+        .disabled(focusing)
         .accessibilityLabel("Spin for tonight's cuisine")
+    }
+
+    private var searchButton: some View {
+        Button {
+            showSearch = true
+        } label: {
+            Image(systemName: "magnifyingglass")
+                .font(.title3.weight(.semibold))
+                .padding(15)
+                .background(.regularMaterial, in: Circle())
+                .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+        }
+        .disabled(focusing)
+        .accessibilityLabel("Find a country or cuisine")
     }
 
     /// Land on a random cuisine you haven't tried (anywhere, once you've tried
@@ -111,8 +147,20 @@ struct GlobeSceneView: View {
         let untried = withGeometry.filter { vm.statusByCountry[$0.code] == nil }
         guard let pick = (untried.isEmpty ? withGeometry : untried).randomElement() else { return }
         selectedCode = nil
-        spinning = true
-        spinTarget = .init(id: UUID(), code: pick.code)
+        focusing = true
+        focusTarget = .init(id: UUID(), code: pick.code, style: .spin)
+    }
+
+    /// Rotate straight to a chosen country (search pick / deep link) and open
+    /// its panel — the "find a cuisine to log" path.
+    private func flyTo(code: String) {
+        guard CountryGeometry.rings[code] != nil else {
+            selectedCode = code // no polygon to fly to; still show the panel
+            return
+        }
+        selectedCode = nil
+        focusing = true
+        focusTarget = .init(id: UUID(), code: code, style: .fly)
     }
 
     private func findNearby(_ country: Country) {

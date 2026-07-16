@@ -3,26 +3,32 @@ import SceneKit
 import simd
 
 /// Reusable SceneKit globe: ocean sphere + tinted country caps + hairline
-/// borders + zoom-gated name labels, recolored via a closure and reporting
-/// taps. Shared by the personal globe (GlobeSceneView) and the group globe
-/// (GroupGlobeView) so the geometry/build lives in one place.
+/// borders, recolored via a closure and reporting taps. Shared by the personal
+/// globe (GlobeSceneView) and the group globe (GroupGlobeView) so the
+/// geometry/build lives in one place.
 ///
 /// The SCNView renders transparent so the SwiftUI layer behind it owns the
 /// backdrop (paper gradient, halo, progress chips).
 struct GlobeCanvas: UIViewRepresentable {
-    /// One-shot request to spin the globe and land on a country (new UUID per spin).
-    struct SpinRequest: Equatable {
+    /// One-shot request to rotate the globe onto a country (new UUID per request).
+    struct FocusRequest: Equatable {
+        enum Style {
+            case spin   // dramatic wind-up first (the dice)
+            case fly    // direct eased rotation (search / deep links)
+        }
+
         let id: UUID
         let code: String
+        var style: Style = .spin
     }
 
     /// Cap color for a country code, given whether it's the current selection.
     var color: (_ code: String, _ selected: Bool) -> UIColor
     @Binding var selected: String?
-    /// Set to a fresh SpinRequest to spin-and-land; cleared by the caller in onSpinLanded.
-    var spinTo: Binding<SpinRequest?> = .constant(nil)
-    /// Fires after the spin settles on its country (haptic already played).
-    var onSpinLanded: ((String) -> Void)? = nil
+    /// Set to a fresh FocusRequest to rotate there; cleared by the caller in onFocusLanded.
+    var focusOn: Binding<FocusRequest?> = .constant(nil)
+    /// Fires after the globe settles on the requested country (haptic already played).
+    var onFocusLanded: ((String) -> Void)? = nil
     /// Long-press on a country — the "log this cuisine right here" gesture.
     var onLongPress: ((String) -> Void)? = nil
 
@@ -36,7 +42,6 @@ struct GlobeCanvas: UIViewRepresentable {
         view.allowsCameraControl = true
         view.antialiasingMode = .multisampling2X
         view.pointOfView = context.coordinator.cameraNode
-        view.delegate = context.coordinator // label visibility per frame
 
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         view.addGestureRecognizer(tap)
@@ -58,9 +63,9 @@ struct GlobeCanvas: UIViewRepresentable {
         }
         coordinator.showOutline(for: selected)
 
-        if let request = spinTo.wrappedValue, request.id != coordinator.lastSpinId {
-            coordinator.lastSpinId = request.id
-            coordinator.spin(to: request.code, onLanded: onSpinLanded)
+        if let request = focusOn.wrappedValue, request.id != coordinator.lastFocusId {
+            coordinator.lastFocusId = request.id
+            coordinator.focus(on: request.code, style: request.style, onLanded: onFocusLanded)
         }
     }
 
@@ -69,7 +74,7 @@ struct GlobeCanvas: UIViewRepresentable {
         scene.background.contents = UIColor.clear
 
         // Everything that should rotate as one unit lives under globeNode
-        // (the spin animation rotates this, not the camera).
+        // (focus animations rotate this, not the camera).
         let globe = SCNNode()
         globe.name = "globe"
         scene.rootNode.addChildNode(globe)
@@ -90,17 +95,6 @@ struct GlobeCanvas: UIViewRepresentable {
 
         globe.addChildNode(GlobeDecor.bordersNode())
 
-        // Labels are a few hundred ms of SCNText tessellation on first build —
-        // assemble off-main, attach on main so the tab opens instantly.
-        DispatchQueue.global(qos: .userInitiated).async {
-            let labels = GlobeDecor.labelNodes()
-            DispatchQueue.main.async {
-                guard let globeNode = coordinator.globeNode else { return }
-                labels.forEach { globeNode.addChildNode($0.node) }
-                coordinator.labels = labels
-            }
-        }
-
         let camera = SCNCamera()
         camera.fieldOfView = 40
         let cam = SCNNode()
@@ -115,19 +109,18 @@ struct GlobeCanvas: UIViewRepresentable {
         return scene
     }
 
-    final class Coordinator: NSObject, SCNSceneRendererDelegate {
+    final class Coordinator: NSObject {
         var countryNodes: [String: SCNNode] = [:]
-        var labels: [GlobeDecor.Label] = []
         var cameraNode = SCNNode()
         var globeNode: SCNNode?
         weak var scnView: SCNView?
         var onLongPress: ((String) -> Void)?
-        var lastSpinId: UUID?
+        var lastFocusId: UUID?
 
         private var selected: Binding<String?>
         private var outlineNode: SCNNode?
         private var outlineCode: String?
-        private var spinning = false
+        private var focusing = false
 
         init(selected: Binding<String?>) { self.selected = selected }
 
@@ -175,33 +168,42 @@ struct GlobeCanvas: UIViewRepresentable {
             }
         }
 
-        // ── Spin-to-country ──────────────────────────────────────────────────
+        // ── Focus (spin / fly) ───────────────────────────────────────────────
 
-        /// Two beats: a fast eased wind-up spin, then an exact settle that
-        /// brings the country's centroid to face the camera.
-        func spin(to code: String, onLanded: ((String) -> Void)?) {
-            guard !spinning,
+        /// .spin: a fast eased wind-up, then an exact settle onto the country.
+        /// .fly: the settle alone — used when the user picked the destination
+        /// (search), where drama would just be latency.
+        func focus(on code: String, style: FocusRequest.Style, onLanded: ((String) -> Void)?) {
+            guard !focusing,
                   let view = scnView,
                   let globe = globeNode,
                   let country = CountryStore.byCode[code] else { return }
-            spinning = true
+            focusing = true
             view.allowsCameraControl = false
 
             let target = GlobeMath.vec3(lat: country.centroid.lat, lng: country.centroid.lng, radius: 1)
             let targetLocal = simd_normalize(simd_float3(target.x, target.y, target.z))
 
-            let windUp = SCNAction.rotateBy(x: 0, y: -.pi * 4, z: 0, duration: 1.15)
-            windUp.timingMode = .easeIn
-            globe.runAction(windUp) { [weak self] in
-                DispatchQueue.main.async {
-                    self?.settle(on: targetLocal, code: code, onLanded: onLanded)
+            switch style {
+            case .spin:
+                let windUp = SCNAction.rotateBy(x: 0, y: -.pi * 4, z: 0, duration: 1.15)
+                windUp.timingMode = .easeIn
+                globe.runAction(windUp) { [weak self] in
+                    DispatchQueue.main.async {
+                        self?.settle(on: targetLocal, code: code, duration: 0.9,
+                                     haptic: .medium, onLanded: onLanded)
+                    }
                 }
+            case .fly:
+                settle(on: targetLocal, code: code, duration: 0.75, haptic: .light, onLanded: onLanded)
             }
         }
 
-        private func settle(on targetLocal: simd_float3, code: String, onLanded: ((String) -> Void)?) {
+        private func settle(on targetLocal: simd_float3, code: String, duration: CFTimeInterval,
+                            haptic: UIImpactFeedbackGenerator.FeedbackStyle,
+                            onLanded: ((String) -> Void)?) {
             guard let view = scnView, let globe = globeNode, let pov = view.pointOfView else {
-                spinning = false
+                focusing = false
                 return
             }
             let camDir = simd_normalize(pov.presentation.simdWorldPosition)
@@ -210,41 +212,18 @@ struct GlobeCanvas: UIViewRepresentable {
             let correction = simd_quatf(from: currentDir, to: camDir)
 
             SCNTransaction.begin()
-            SCNTransaction.animationDuration = 0.9
+            SCNTransaction.animationDuration = duration
             SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeOut)
             SCNTransaction.completionBlock = { [weak self] in
                 DispatchQueue.main.async {
-                    self?.spinning = false
+                    self?.focusing = false
                     view.allowsCameraControl = true
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    UIImpactFeedbackGenerator(style: haptic).impactOccurred()
                     onLanded?(code)
                 }
             }
             globe.simdOrientation = simd_normalize(correction * q0)
             SCNTransaction.commit()
-        }
-
-        // ── Label visibility (per rendered frame) ────────────────────────────
-
-        func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
-            guard !labels.isEmpty, let pov = scnView?.pointOfView else { return }
-            let camPos = pov.presentation.simdWorldPosition
-            let distance = simd_length(camPos)
-            guard distance > 0.001 else { return }
-            let camDir = camPos / distance
-            let scale = GlobeDecor.labelBaseScale * max(0.45, distance / 3.2)
-
-            for label in labels {
-                let worldDir = simd_normalize(label.node.presentation.simdWorldPosition)
-                // Labels ignore the depth buffer (no half-sunk glyphs), so the
-                // far-side cull here is what keeps them off the back of the globe.
-                let facing = simd_dot(worldDir, camDir)
-                let visible = facing > 0.35 && distance < label.tier.showsBelowDistance
-                if label.node.isHidden == visible { label.node.isHidden = !visible }
-                if visible, abs(label.node.scale.x - scale) > 0.0002 {
-                    label.node.scale = SCNVector3(scale, scale, scale)
-                }
-            }
         }
     }
 }
