@@ -18,6 +18,9 @@ targets:
     type: application
     platform: iOS
     sources: [CulinaryPassport]
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "1" # phone-first product; iPad runs the scaled iPhone app
     dependencies:
       - package: Supabase
         product: Supabase
@@ -25,6 +28,10 @@ targets:
       path: CulinaryPassport/Info.plist
       properties:
         UILaunchScreen: {}
+        # Portrait-only + full screen: silences the "all interface orientations
+        # must be supported" warning without pretending to support landscape.
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIRequiresFullScreen: true
         NSCameraUsageDescription: "Take a selfie to generate your avatar, and snap your meals."
         NSPhotoLibraryUsageDescription: "Attach photos of your meals."
         NSLocationWhenInUseUsageDescription: "Find restaurants serving tonight's cuisine near you."

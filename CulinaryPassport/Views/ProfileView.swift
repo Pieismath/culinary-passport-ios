@@ -12,63 +12,33 @@ struct ProfileView: View {
     @State private var profile: Profile?
     @State private var showEdit = false
 
+    @State private var stats: (countries: Int, meals: Int, continents: Int)?
+
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                // Composited with equipped accessories (ROADMAP item 17).
-                ComposedAvatarView(url: avatarURL, equipped: equipped, size: 180)
-                    .id(equipped)
+            ScrollView {
+                VStack(spacing: 18) {
+                    heroCard
+                    statsRow
+                    actionRows
 
-                PhotosPicker(selection: $pickedItem, matching: .images) {
-                    Label(busy ? "Generating…" : "New selfie → new avatar", systemImage: "camera")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(busy)
-
-                if let profile {
-                    VStack(spacing: 2) {
-                        Text(profile.name).font(.title3).bold()
-                        if let username = profile.username, !username.isEmpty {
-                            Text("@\(username)").font(.subheadline).foregroundStyle(.secondary)
-                        }
-                        Label(profile.isPublic == true ? "Public profile" : "Private profile",
-                              systemImage: profile.isPublic == true ? "globe" : "lock")
-                            .font(.caption).foregroundStyle(.secondary)
+                    if let status {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
                     }
-                }
 
-                NavigationLink {
-                    AvatarCustomizeView(avatarURL: avatarURL)
-                } label: {
-                    Label("Customize avatar", systemImage: "wand.and.stars")
+                    Button("Sign out") {
+                        Task { try? await SupabaseService.shared.client.auth.signOut() }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 8)
                 }
-                .disabled(avatarURL == nil)
-
-                Button { showEdit = true } label: {
-                    Label("Edit profile", systemImage: "pencil")
-                }
-
-                NavigationLink {
-                    WrappedView()
-                } label: {
-                    Label("Year in review", systemImage: "sparkles")
-                }
-
-                if let status {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-
-                Spacer()
-
-                Button("Sign out") {
-                    Task { try? await SupabaseService.shared.client.auth.signOut() }
-                }
-                .font(.caption)
+                .padding()
             }
-            .padding()
+            .background(Color(red: 0.972, green: 0.960, blue: 0.930).ignoresSafeArea())
             .navigationTitle("Profile")
             .task { await loadAvatar() }
             .onAppear { equipped = EquippedStore.load() } // reflect customizer changes on return
@@ -83,6 +53,121 @@ struct ProfileView: View {
         }
     }
 
+    // ── Hero: avatar on a soft backdrop, camera FAB, identity (bitmoji-style) ─
+
+    private var heroCard: some View {
+        VStack(spacing: 14) {
+            ZStack(alignment: .bottomTrailing) {
+                // Composited with equipped accessories (ROADMAP item 17).
+                ComposedAvatarView(url: avatarURL, equipped: equipped, size: 190)
+                    .id(equipped)
+                    .background(Circle().fill(.white).padding(-8))
+                    .overlay(Circle().stroke(.white, lineWidth: 5).padding(-8))
+                    .shadow(color: .black.opacity(0.14), radius: 14, y: 6)
+                    .overlay {
+                        if busy {
+                            ZStack {
+                                Circle().fill(.black.opacity(0.35))
+                                ProgressView().tint(.white)
+                            }
+                        }
+                    }
+
+                // "new selfie → new avatar" lives on the avatar itself.
+                PhotosPicker(selection: $pickedItem, matching: .images) {
+                    Image(systemName: "camera.fill")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(Circle().fill(Color.accentColor))
+                        .overlay(Circle().stroke(.white, lineWidth: 3))
+                        .shadow(color: .black.opacity(0.2), radius: 5, y: 2)
+                }
+                .disabled(busy)
+                .offset(x: 6, y: 6)
+                .accessibilityLabel("New selfie, new avatar")
+            }
+            .padding(.top, 26)
+
+            VStack(spacing: 3) {
+                Text(profile?.name ?? " ").font(.title2.bold())
+                if let username = profile?.username, !username.isEmpty {
+                    Text("@\(username)").font(.subheadline).foregroundStyle(.secondary)
+                }
+                if let profile {
+                    Label(profile.isPublic == true ? "Public profile" : "Private profile",
+                          systemImage: profile.isPublic == true ? "globe" : "lock")
+                        .font(.caption)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(.white.opacity(0.7), in: Capsule())
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 3)
+                }
+            }
+            .padding(.bottom, 20)
+        }
+        .frame(maxWidth: .infinity)
+        .background {
+            // warm paper → soft lavender wash, with faint stamp rings
+            ZStack {
+                LinearGradient(
+                    colors: [Color(red: 0.99, green: 0.98, blue: 0.96),
+                             Color(red: 0.90, green: 0.87, blue: 0.95)],
+                    startPoint: .top, endPoint: .bottom
+                )
+                Circle().stroke(.white.opacity(0.5), lineWidth: 1.5)
+                    .frame(width: 300, height: 300).offset(x: -130, y: -70)
+                Circle().stroke(.white.opacity(0.4), lineWidth: 1.5)
+                    .frame(width: 210, height: 210).offset(x: 150, y: 90)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 26))
+        .shadow(color: .black.opacity(0.06), radius: 10, y: 4)
+    }
+
+    // ── Stats ────────────────────────────────────────────────────────────────
+
+    private var statsRow: some View {
+        HStack(spacing: 10) {
+            StatTile(value: stats.map { "\($0.countries)" } ?? "–", label: "cuisines")
+            StatTile(value: stats.map { "\($0.meals)" } ?? "–", label: "meals")
+            StatTile(value: stats.map { "\($0.continents)" } ?? "–", label: "continents")
+        }
+    }
+
+    // ── Actions ──────────────────────────────────────────────────────────────
+
+    private var actionRows: some View {
+        VStack(spacing: 0) {
+            NavigationLink {
+                AvatarCustomizeView(avatarURL: avatarURL)
+            } label: {
+                ActionRow(icon: "wand.and.stars", tint: .purple, title: "Customize avatar")
+            }
+            .buttonStyle(.plain)
+            .disabled(avatarURL == nil)
+            .opacity(avatarURL == nil ? 0.45 : 1)
+
+            Divider().padding(.leading, 56)
+
+            Button { showEdit = true } label: {
+                ActionRow(icon: "pencil", tint: .blue, title: "Edit profile")
+            }
+            .buttonStyle(.plain)
+
+            Divider().padding(.leading, 56)
+
+            NavigationLink {
+                WrappedView()
+            } label: {
+                ActionRow(icon: "sparkles", tint: .orange, title: "Year in review")
+            }
+            .buttonStyle(.plain)
+        }
+        .background(.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 18))
+        .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
+    }
+
     private func loadAvatar() async {
         do {
             guard let me = try await SupabaseService.shared.myProfile() else {
@@ -92,6 +177,10 @@ struct ProfileView: View {
             }
             profile = me
             if let urlString = me.avatarUrl { avatarURL = URL(string: urlString) }
+            let entries = (try? await SupabaseService.shared.myEntries()) ?? []
+            let codes = Set(entries.map(\.countryCode))
+            let continents = Set(codes.compactMap { CountryStore.byCode[$0]?.continent })
+            stats = (codes.count, entries.count, continents.count)
         } catch {
             // Transient load failure — leave the screen as-is (don't sign out).
         }
@@ -114,6 +203,46 @@ struct ProfileView: View {
         } catch {
             status = error.localizedDescription // includes the 3/day limit message from the server
         }
+    }
+}
+
+private struct StatTile: View {
+    let value: String
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(value).font(.title3.bold()).monospacedDigit()
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 14))
+        .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
+    }
+}
+
+private struct ActionRow: View {
+    let icon: String
+    let tint: Color
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(RoundedRectangle(cornerRadius: 9).fill(tint.gradient))
+            Text(title).foregroundStyle(.primary)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
     }
 }
 

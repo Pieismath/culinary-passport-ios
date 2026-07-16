@@ -47,7 +47,12 @@ final class SessionStore {
         let skipPush = ProcessInfo.processInfo.arguments.contains("-noPush")
         for await state in SupabaseService.shared.client.auth.authStateChanges {
             isSignedIn = state.session != nil
-            if isSignedIn && !skipPush { PushRegistrar.requestAndRegister() }
+            // .initialSession can now carry an expired session (offline
+            // relaunch): still show the app — autoRefresh will replace it
+            // (tokenRefreshed) or end it (signedOut) — but hold side effects
+            // like the push permission prompt until the session is valid.
+            let sessionIsValid = state.session.map { !$0.isExpired } ?? false
+            if sessionIsValid && !skipPush { PushRegistrar.requestAndRegister() }
         }
     }
 }

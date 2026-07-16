@@ -75,7 +75,10 @@ final class GlobeViewModel: ObservableObject {
             usersById = users
             error = nil
         } catch {
-            self.error = error.localizedDescription
+            // -uiPreview browses without a backend; don't surface those failures.
+            if !ProcessInfo.processInfo.arguments.contains("-uiPreview") {
+                self.error = error.localizedDescription
+            }
         }
     }
 

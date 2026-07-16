@@ -11,7 +11,17 @@ final class SupabaseService {
         client = SupabaseClient(
             supabaseURL: Config.supabaseURL,
             supabaseKey: Config.supabaseAnonKey,
-            options: .init(db: .init(encoder: Self.encoder, decoder: Self.decoder))
+            options: .init(
+                db: .init(encoder: Self.encoder, decoder: Self.decoder),
+                auth: .init(
+                    storage: AuthClient.Configuration.defaultLocalStorage,
+                    // Opt into the next-major behavior: the locally stored
+                    // session is emitted as .initialSession immediately (even
+                    // if expired) instead of after a refresh attempt.
+                    // SessionStore checks isExpired before side effects.
+                    emitLocalSessionAsInitialSession: true
+                )
+            )
         )
     }
 

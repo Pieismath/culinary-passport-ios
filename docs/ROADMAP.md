@@ -38,7 +38,9 @@ remains — switching costs one env var (`AVATAR_PROVIDER`).
     a paid Apple Developer account
 
 ## v1.3 — retention loops
-15. ✅ Random dinner picker (filter-aware spin + nearby cards)
+15. ✅ Random dinner picker — v2: the dice physically spins the globe and lands
+    on an untried cuisine; the country panel offers Log + Nearby (the flag
+    slot-machine sheet it replaced is gone)
 16. ✅ Long-distance sync meal (heart-linked stamp)
 17. 🔶 Avatar unlockable accessories — shipped as emoji/vector composites;
     swap for preset PNG art when it lands (prompt variants v2)
