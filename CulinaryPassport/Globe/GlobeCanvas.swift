@@ -4,8 +4,14 @@ import simd
 
 /// Reusable SceneKit globe: ocean sphere + tinted country caps + hairline
 /// borders, recolored via a closure and reporting taps. Shared by the personal
-/// globe (GlobeSceneView) and the group globe (GroupGlobeView) so the
-/// geometry/build lives in one place.
+/// globe (GlobeSceneView) and the group globe (GroupGlobeView).
+///
+/// Interaction is map-style, NOT SceneKit's built-in arcball: the camera never
+/// moves — one finger rotates the GLOBE (yaw unbounded, pitch clamped at the
+/// poles, north always up, flick inertia), two fingers pinch-zoom the camera
+/// distance. SceneKit's `allowsCameraControl` is deliberately unused: its
+/// arcball flips upside down past a pole, which inverts drag direction and
+/// made fly-to landings look rolled.
 ///
 /// The SCNView renders transparent so the SwiftUI layer behind it owns the
 /// backdrop (paper gradient, halo, progress chips).
@@ -13,7 +19,7 @@ struct GlobeCanvas: UIViewRepresentable {
     /// One-shot request to rotate the globe onto a country (new UUID per request).
     struct FocusRequest: Equatable {
         enum Style {
-            case spin   // dramatic wind-up first (the dice)
+            case spin   // a couple of full revolutions on the way (the dice)
             case fly    // direct eased rotation (search / deep links)
         }
 
@@ -27,8 +33,9 @@ struct GlobeCanvas: UIViewRepresentable {
     @Binding var selected: String?
     /// Set to a fresh FocusRequest to rotate there; cleared by the caller in onFocusLanded.
     var focusOn: Binding<FocusRequest?> = .constant(nil)
-    /// Fires after the globe settles on the requested country (haptic already played).
-    var onFocusLanded: ((String) -> Void)? = nil
+    /// Fires when the rotation ends: the country code on landing, or nil if the
+    /// user grabbed the globe mid-flight and cancelled it.
+    var onFocusLanded: ((String?) -> Void)? = nil
     /// Long-press on a country — the "log this cuisine right here" gesture.
     var onLongPress: ((String) -> Void)? = nil
 
@@ -39,15 +46,22 @@ struct GlobeCanvas: UIViewRepresentable {
         view.scene = buildScene(into: context.coordinator)
         view.backgroundColor = .clear // SwiftUI backdrop shows through
         view.isOpaque = false
-        view.allowsCameraControl = true
         view.antialiasingMode = .multisampling2X
         view.pointOfView = context.coordinator.cameraNode
 
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         view.addGestureRecognizer(tap)
+
         let hold = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
         hold.minimumPressDuration = 0.45
         view.addGestureRecognizer(hold)
+
+        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        pan.maximumNumberOfTouches = 1 // two fingers belong to pinch
+        view.addGestureRecognizer(pan)
+
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
+        view.addGestureRecognizer(pinch)
 
         context.coordinator.scnView = view
         context.coordinator.onLongPress = onLongPress
@@ -73,8 +87,7 @@ struct GlobeCanvas: UIViewRepresentable {
         let scene = SCNScene()
         scene.background.contents = UIColor.clear
 
-        // Everything that should rotate as one unit lives under globeNode
-        // (focus animations rotate this, not the camera).
+        // Everything that rotates lives under globeNode; the camera is fixed.
         let globe = SCNNode()
         globe.name = "globe"
         scene.rootNode.addChildNode(globe)
@@ -101,8 +114,8 @@ struct GlobeCanvas: UIViewRepresentable {
         cam.camera = camera
         // Portrait phones: the vertical FOV maps to a ~19° horizontal FOV, so
         // the whole globe needs ~6.9 units of distance to fit the width with a
-        // paper margin (3.2 filled the screen edge-to-edge).
-        cam.position = SCNVector3(0, 0, 6.9)
+        // paper margin.
+        cam.position = SCNVector3(0, 0, Coordinator.defaultCameraZ)
         scene.rootNode.addChildNode(cam)
         coordinator.cameraNode = cam
 
@@ -110,6 +123,8 @@ struct GlobeCanvas: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject {
+        static let defaultCameraZ: Float = 6.9
+
         var countryNodes: [String: SCNNode] = [:]
         var cameraNode = SCNNode()
         var globeNode: SCNNode?
@@ -120,11 +135,34 @@ struct GlobeCanvas: UIViewRepresentable {
         private var selected: Binding<String?>
         private var outlineNode: SCNNode?
         private var outlineCode: String?
-        private var focusing = false
+
+        // ── Orientation state: north can never roll ──────────────────────────
+        // orientation = Rx(pitch) · Ry(yaw). Yaw spins around the earth's axis
+        // (turntable), pitch tilts toward the poles and is clamped, so the
+        // globe can never flip and drags always track the finger.
+        private var yaw: Float = 0
+        private var pitch: Float = 0
+        private let pitchLimit: Float = 1.45 // ~83°, matches map apps
+        private var cameraZ: Float = Coordinator.defaultCameraZ
+
+        private enum Drive {
+            case idle
+            case inertia(vYaw: Float, vPitch: Float)
+            case animate(fromYaw: Float, fromPitch: Float, toYaw: Float, toPitch: Float,
+                         start: CFTimeInterval, duration: CFTimeInterval,
+                         code: String, haptic: UIImpactFeedbackGenerator.FeedbackStyle,
+                         onLanded: ((String?) -> Void)?)
+        }
+
+        private var drive: Drive = .idle
+        private var displayLink: CADisplayLink?
+        private var lastTick: CFTimeInterval = 0
 
         init(selected: Binding<String?>) { self.selected = selected }
 
-        // ── Tap / long-press ─────────────────────────────────────────────────
+        deinit { displayLink?.invalidate() }
+
+        // ── Gestures ─────────────────────────────────────────────────────────
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
             guard let code = countryCode(at: gesture.location(in: scnView)) else {
@@ -140,6 +178,47 @@ struct GlobeCanvas: UIViewRepresentable {
             UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
             selected.wrappedValue = code
             onLongPress?(code)
+        }
+
+        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
+            guard let view = scnView else { return }
+            switch gesture.state {
+            case .began:
+                cancelDrive() // grabbing the globe interrupts inertia / fly
+            case .changed:
+                let t = gesture.translation(in: view)
+                gesture.setTranslation(.zero, in: view)
+                let k = radiansPerPoint(in: view)
+                yaw += Float(t.x) * k
+                pitch = max(-pitchLimit, min(pitchLimit, pitch + Float(t.y) * k))
+                applyOrientation()
+            case .ended:
+                let v = gesture.velocity(in: view)
+                let k = radiansPerPoint(in: view)
+                let vYaw = Float(v.x) * k
+                let vPitch = Float(v.y) * k
+                if abs(vYaw) > 0.02 || abs(vPitch) > 0.02 {
+                    drive = .inertia(vYaw: vYaw, vPitch: vPitch)
+                    startTicking()
+                }
+            default:
+                break
+            }
+        }
+
+        @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+            guard gesture.state == .changed else { return }
+            cameraZ = max(4.2, min(10.5, cameraZ / Float(gesture.scale)))
+            gesture.scale = 1
+            cameraNode.position.z = cameraZ
+        }
+
+        /// Content-follows-finger: one point of drag ≈ the arc it covers on the
+        /// visible face, so sensitivity tracks the zoom level.
+        private func radiansPerPoint(in view: SCNView) -> Float {
+            let width = Float(view.bounds.width)
+            guard width > 0 else { return 0.005 }
+            return cameraZ / (3.45 * width)
         }
 
         private func countryCode(at point: CGPoint?) -> String? {
@@ -170,60 +249,112 @@ struct GlobeCanvas: UIViewRepresentable {
 
         // ── Focus (spin / fly) ───────────────────────────────────────────────
 
-        /// .spin: a fast eased wind-up, then an exact settle onto the country.
-        /// .fly: the settle alone — used when the user picked the destination
-        /// (search), where drama would just be latency.
-        func focus(on code: String, style: FocusRequest.Style, onLanded: ((String) -> Void)?) {
-            guard !focusing,
-                  let view = scnView,
-                  let globe = globeNode,
-                  let country = CountryStore.byCode[code] else { return }
-            focusing = true
-            view.allowsCameraControl = false
-
-            let target = GlobeMath.vec3(lat: country.centroid.lat, lng: country.centroid.lng, radius: 1)
-            let targetLocal = simd_normalize(simd_float3(target.x, target.y, target.z))
-
-            switch style {
-            case .spin:
-                let windUp = SCNAction.rotateBy(x: 0, y: -.pi * 4, z: 0, duration: 1.15)
-                windUp.timingMode = .easeIn
-                globe.runAction(windUp) { [weak self] in
-                    DispatchQueue.main.async {
-                        self?.settle(on: targetLocal, code: code, duration: 0.9,
-                                     haptic: .medium, onLanded: onLanded)
-                    }
-                }
-            case .fly:
-                settle(on: targetLocal, code: code, duration: 0.75, haptic: .light, onLanded: onLanded)
-            }
-        }
-
-        private func settle(on targetLocal: simd_float3, code: String, duration: CFTimeInterval,
-                            haptic: UIImpactFeedbackGenerator.FeedbackStyle,
-                            onLanded: ((String) -> Void)?) {
-            guard let view = scnView, let globe = globeNode, let pov = view.pointOfView else {
-                focusing = false
+        /// Rotate the globe so `code`'s centroid faces the camera, north up.
+        /// Landing orientation is yaw = −lng, pitch = +lat — a direct
+        /// construction with no degenerate cases (the old shortest-arc
+        /// quaternion could roll the globe or go NaN near-antipodal, which is
+        /// what "landed upside down" and "then it locked up" were).
+        func focus(on code: String, style: FocusRequest.Style, onLanded: ((String?) -> Void)?) {
+            guard let country = CountryStore.byCode[code] else {
+                onLanded?(nil)
                 return
             }
-            let camDir = simd_normalize(pov.presentation.simdWorldPosition)
-            let q0 = globe.simdOrientation
-            let currentDir = simd_normalize(simd_act(q0, targetLocal))
-            let correction = simd_quatf(from: currentDir, to: camDir)
+            cancelDrive()
 
-            SCNTransaction.begin()
-            SCNTransaction.animationDuration = duration
-            SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeOut)
-            SCNTransaction.completionBlock = { [weak self] in
-                DispatchQueue.main.async {
-                    self?.focusing = false
-                    view.allowsCameraControl = true
+            let toPitch = Float(country.centroid.lat * .pi / 180)
+            var toYaw = Float(-country.centroid.lng * .pi / 180)
+
+            // Take the short way around from the current yaw…
+            let twoPi = Float.pi * 2
+            var delta = (toYaw - yaw).truncatingRemainder(dividingBy: twoPi)
+            if delta > .pi { delta -= twoPi }
+            if delta < -.pi { delta += twoPi }
+            toYaw = yaw + delta
+
+            let duration: CFTimeInterval
+            let haptic: UIImpactFeedbackGenerator.FeedbackStyle
+            switch style {
+            case .spin:
+                toYaw -= twoPi * 2 // …plus two full revolutions for the dice
+                duration = 1.9
+                haptic = .medium
+            case .fly:
+                duration = 0.75
+                haptic = .light
+            }
+
+            drive = .animate(fromYaw: yaw, fromPitch: pitch, toYaw: toYaw,
+                             toPitch: min(pitchLimit, max(-pitchLimit, toPitch)),
+                             start: CACurrentMediaTime(), duration: duration,
+                             code: code, haptic: haptic, onLanded: onLanded)
+            startTicking()
+        }
+
+        /// Interrupt whatever motion is running (user grabbed the globe).
+        private func cancelDrive() {
+            if case let .animate(_, _, _, _, _, _, _, _, onLanded) = drive {
+                onLanded?(nil)
+            }
+            drive = .idle
+            displayLink?.isPaused = true
+        }
+
+        // ── Display-link motor (inertia + focus animations) ──────────────────
+
+        private func startTicking() {
+            if displayLink == nil {
+                let link = CADisplayLink(target: self, selector: #selector(tick))
+                link.add(to: .main, forMode: .common)
+                displayLink = link
+            }
+            lastTick = CACurrentMediaTime()
+            displayLink?.isPaused = false
+        }
+
+        @objc private func tick() {
+            let now = CACurrentMediaTime()
+            let dt = Float(min(now - lastTick, 1.0 / 30.0))
+            lastTick = now
+
+            switch drive {
+            case .idle:
+                displayLink?.isPaused = true
+
+            case .inertia(var vYaw, var vPitch):
+                yaw += vYaw * dt
+                pitch = max(-pitchLimit, min(pitchLimit, pitch + vPitch * dt))
+                let decay = exp(-3.5 * dt)
+                vYaw *= decay
+                vPitch *= decay
+                if abs(vYaw) < 0.015 && abs(vPitch) < 0.015 {
+                    drive = .idle
+                    displayLink?.isPaused = true
+                } else {
+                    drive = .inertia(vYaw: vYaw, vPitch: vPitch)
+                }
+                applyOrientation()
+
+            case let .animate(fromYaw, fromPitch, toYaw, toPitch, start, duration, code, haptic, onLanded):
+                let raw = Float((now - start) / duration)
+                let t = min(1, max(0, raw))
+                // easeInOut cubic: winds up, coasts, settles
+                let eased = t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
+                yaw = fromYaw + (toYaw - fromYaw) * eased
+                pitch = fromPitch + (toPitch - fromPitch) * eased
+                applyOrientation()
+                if t >= 1 {
+                    drive = .idle
+                    displayLink?.isPaused = true
                     UIImpactFeedbackGenerator(style: haptic).impactOccurred()
                     onLanded?(code)
                 }
             }
-            globe.simdOrientation = simd_normalize(correction * q0)
-            SCNTransaction.commit()
+        }
+
+        private func applyOrientation() {
+            let qPitch = simd_quatf(angle: pitch, axis: simd_float3(1, 0, 0))
+            let qYaw = simd_quatf(angle: yaw, axis: simd_float3(0, 1, 0))
+            globeNode?.simdOrientation = qPitch * qYaw
         }
     }
 }

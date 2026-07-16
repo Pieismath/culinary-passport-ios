@@ -24,7 +24,7 @@ struct GlobeSceneView: View {
                 onFocusLanded: { code in
                     focusing = false
                     focusTarget = nil
-                    selectedCode = code
+                    if let code { selectedCode = code } // nil = user grabbed the globe mid-flight
                 },
                 onLongPress: { code in
                     logCountry = CountryStore.byCode[code]
