@@ -23,6 +23,7 @@ struct GroupGlobeView: View {
     @StateObject private var vm = GroupGlobeViewModel()
     @State private var mode: Mode = .solidarity
     @State private var selected: String?
+    @State private var viewingEntry: Entry?
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -39,7 +40,8 @@ struct GroupGlobeView: View {
                     entries: vm.entriesByCountry[code] ?? [],
                     authors: vm.usersById,
                     memberCount: vm.memberIds.count,
-                    onClose: { selected = nil }
+                    onClose: { selected = nil },
+                    onSelectEntry: { viewingEntry = $0 }
                 )
                 .padding()
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -50,6 +52,12 @@ struct GroupGlobeView: View {
                     .background(.thinMaterial, in: Capsule())
                     .padding(.bottom, 20)
             }
+        }
+        .sheet(item: $viewingEntry) { entry in
+            EntryDetailView(entry: entry, author: vm.usersById[entry.userId]) {
+                await vm.load(group: group)
+            }
+            .presentationDetents([.medium, .large])
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selected)
         .navigationTitle("\(group.name) globe")
@@ -135,6 +143,7 @@ private struct GroupCountryPanel: View {
     let authors: [UUID: Profile]
     let memberCount: Int
     let onClose: () -> Void
+    let onSelectEntry: (Entry) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -162,8 +171,8 @@ private struct GroupCountryPanel: View {
             } else {
                 Divider()
                 // Who ate what, where, when — RLS already scopes this to
-                // entries shared with the group.
-                CountryEntriesList(entries: entries, authors: authors)
+                // entries shared with the group. Tap one for the full card.
+                CountryEntriesList(entries: entries, authors: authors, onSelect: onSelectEntry)
             }
         }
         .padding()

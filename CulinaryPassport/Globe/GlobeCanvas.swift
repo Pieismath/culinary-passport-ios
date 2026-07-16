@@ -49,7 +49,12 @@ struct GlobeCanvas: UIViewRepresentable {
         view.antialiasingMode = .multisampling2X
         view.pointOfView = context.coordinator.cameraNode
 
+        let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        view.addGestureRecognizer(doubleTap)
+
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
+        tap.require(toFail: doubleTap) // maps convention: double-tap zooms, so single-tap waits a beat
         view.addGestureRecognizer(tap)
 
         let hold = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
@@ -110,6 +115,7 @@ struct GlobeCanvas: UIViewRepresentable {
 
         let camera = SCNCamera()
         camera.fieldOfView = 40
+        camera.zNear = 0.05 // deep zoom brings the surface well inside the default 1.0
         let cam = SCNNode()
         cam.camera = camera
         // Portrait phones: the vertical FOV maps to a ~19° horizontal FOV, so
@@ -124,6 +130,10 @@ struct GlobeCanvas: UIViewRepresentable {
 
     final class Coordinator: NSObject {
         static let defaultCameraZ: Float = 6.9
+        /// Zoom range: 10.5 shows the globe small; 1.6 puts the surface close
+        /// enough to tap city-state-sized countries comfortably.
+        static let minCameraZ: Float = 1.6
+        static let maxCameraZ: Float = 10.5
 
         var countryNodes: [String: SCNNode] = [:]
         var cameraNode = SCNNode()
@@ -149,8 +159,9 @@ struct GlobeCanvas: UIViewRepresentable {
             case idle
             case inertia(vYaw: Float, vPitch: Float)
             case animate(fromYaw: Float, fromPitch: Float, toYaw: Float, toPitch: Float,
+                         fromZ: Float, toZ: Float,
                          start: CFTimeInterval, duration: CFTimeInterval,
-                         code: String, haptic: UIImpactFeedbackGenerator.FeedbackStyle,
+                         code: String?, haptic: UIImpactFeedbackGenerator.FeedbackStyle?,
                          onLanded: ((String?) -> Void)?)
         }
 
@@ -170,6 +181,31 @@ struct GlobeCanvas: UIViewRepresentable {
                 return
             }
             selected.wrappedValue = (selected.wrappedValue == code) ? nil : code
+        }
+
+        /// Maps convention: double-tap zooms a step toward the tapped point
+        /// (recentering it), and zooms back out once you're already deep.
+        @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+            guard let spot = latLng(at: gesture.location(in: scnView)) else { return }
+            cancelDrive()
+            let zoomingOut = cameraZ < 2.0
+            let toZ = zoomingOut ? Self.defaultCameraZ : max(Self.minCameraZ, cameraZ * 0.5)
+
+            var toYaw = Float(-spot.lng * .pi / 180)
+            let toPitch = max(-pitchLimit, min(pitchLimit, Float(spot.lat * .pi / 180)))
+            let twoPi = Float.pi * 2
+            var delta = (toYaw - yaw).truncatingRemainder(dividingBy: twoPi)
+            if delta > .pi { delta -= twoPi }
+            if delta < -.pi { delta += twoPi }
+            toYaw = yaw + delta
+
+            drive = .animate(fromYaw: yaw, fromPitch: pitch,
+                             toYaw: zoomingOut ? yaw : toYaw,
+                             toPitch: zoomingOut ? pitch : toPitch,
+                             fromZ: cameraZ, toZ: toZ,
+                             start: CACurrentMediaTime(), duration: 0.45,
+                             code: nil, haptic: nil, onLanded: nil)
+            startTicking()
         }
 
         @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
@@ -207,27 +243,33 @@ struct GlobeCanvas: UIViewRepresentable {
         }
 
         @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
-            guard gesture.state == .changed else { return }
-            cameraZ = max(4.2, min(10.5, cameraZ / Float(gesture.scale)))
-            gesture.scale = 1
-            cameraNode.position.z = cameraZ
+            switch gesture.state {
+            case .began:
+                cancelDrive()
+            case .changed:
+                cameraZ = max(Self.minCameraZ, min(Self.maxCameraZ, cameraZ / Float(gesture.scale)))
+                gesture.scale = 1
+                cameraNode.position.z = cameraZ
+            default:
+                break
+            }
         }
 
-        /// Content-follows-finger: one point of drag ≈ the arc it covers on the
-        /// visible face, so sensitivity tracks the zoom level.
+        /// Content-follows-finger: one point of drag ≈ the arc it covers on
+        /// the visible face. Surface distance is (z − 1), not z — the old
+        /// z-proportional constant over-rotated at deep zoom.
         private func radiansPerPoint(in view: SCNView) -> Float {
             let width = Float(view.bounds.width)
             guard width > 0 else { return 0.005 }
-            return cameraZ / (3.45 * width)
+            return max(0.05, cameraZ - 1) / (3.0 * width)
         }
 
-        /// Resolve a touch to a country GEOGRAPHICALLY: any hit on the globe
-        /// (ocean, cap, or border line) gives a sphere point → lat/lng →
-        /// ring lookup. Never depends on which node the ray-cast happened to
-        /// return — cap triangles are back-face-culled out of hit results and
-        /// the borders node shadows everything else, which is why the old
-        /// node-name walk always came up empty.
-        private func countryCode(at point: CGPoint?) -> String? {
+        /// Where on the globe (lat/lng) a screen point touches, or nil
+        /// off-globe. Touches resolve GEOGRAPHICALLY — any hit (ocean, cap,
+        /// border line) gives a sphere direction; never trust hit-node names
+        /// (cap triangles are back-face-culled out of hit results and the
+        /// borders node shadows everything else).
+        private func latLng(at point: CGPoint?) -> (lat: Double, lng: Double)? {
             guard let view = scnView, let point, let globe = globeNode else { return nil }
             let hits = view.hitTest(point, options: [
                 SCNHitTestOption.searchMode: SCNHitTestSearchMode.closest.rawValue,
@@ -240,7 +282,16 @@ struct GlobeCanvas: UIViewRepresentable {
             guard radius > 0.5 else { return nil }
             let lat = asin(max(-1, min(1, Double(local.y) / Double(radius)))) * 180 / .pi
             let lng = atan2(Double(local.x), Double(local.z)) * 180 / .pi
-            return CountryGeometry.country(atLat: lat, lng: lng)
+            return (lat, lng)
+        }
+
+        private func countryCode(at point: CGPoint?) -> String? {
+            guard let spot = latLng(at: point) else { return nil }
+            // Near-miss tolerance shrinks as you zoom in: a finger covers
+            // ~1.2° at the default distance, a fraction of that when close.
+            let tolerance = Double(1.2 * max(0.2, (cameraZ - 1) / 5.9))
+            return CountryGeometry.country(atLat: spot.lat, lng: spot.lng,
+                                           toleranceDegrees: min(1.2, tolerance))
         }
 
         // ── Selection outline ────────────────────────────────────────────────
@@ -282,26 +333,47 @@ struct GlobeCanvas: UIViewRepresentable {
 
             let duration: CFTimeInterval
             let haptic: UIImpactFeedbackGenerator.FeedbackStyle
+            let toZ: Float
             switch style {
             case .spin:
                 toYaw -= twoPi * 2 // …plus two full revolutions for the dice
                 duration = 1.9
                 haptic = .medium
+                toZ = Self.defaultCameraZ // land on the full-globe reveal
             case .fly:
                 duration = 0.75
                 haptic = .light
+                // Zoom to fit what you're flying to: Russia stays wide,
+                // Singapore comes in close enough to actually see and tap.
+                toZ = Self.zoom(forSize: CountryGeometry.sizeHint(code))
             }
 
+            // Land the country a little ABOVE screen center so the panel that
+            // opens over the bottom half doesn't sit on top of it.
+            let panelBias = min(0.22, 0.06 * (toZ - 1))
             drive = .animate(fromYaw: yaw, fromPitch: pitch, toYaw: toYaw,
-                             toPitch: min(pitchLimit, max(-pitchLimit, toPitch)),
+                             toPitch: min(pitchLimit, max(-pitchLimit, toPitch - panelBias)),
+                             fromZ: cameraZ, toZ: toZ,
                              start: CACurrentMediaTime(), duration: duration,
                              code: code, haptic: haptic, onLanded: onLanded)
             startTicking()
         }
 
+        /// Camera distance that frames a country of the given footprint (deg²,
+        /// lat-corrected — see CountryGeometry.sizeHint).
+        private static func zoom(forSize area: Double) -> Float {
+            switch area {
+            case 300...: return 6.9
+            case 60..<300: return 5.4
+            case 12..<60: return 4.0
+            case 2.5..<12: return 2.9
+            default: return 2.1
+            }
+        }
+
         /// Interrupt whatever motion is running (user grabbed the globe).
         private func cancelDrive() {
-            if case let .animate(_, _, _, _, _, _, _, _, onLanded) = drive {
+            if case let .animate(_, _, _, _, _, _, _, _, _, _, onLanded) = drive {
                 onLanded?(nil)
             }
             drive = .idle
@@ -343,18 +415,20 @@ struct GlobeCanvas: UIViewRepresentable {
                 }
                 applyOrientation()
 
-            case let .animate(fromYaw, fromPitch, toYaw, toPitch, start, duration, code, haptic, onLanded):
+            case let .animate(fromYaw, fromPitch, toYaw, toPitch, fromZ, toZ, start, duration, code, haptic, onLanded):
                 let raw = Float((now - start) / duration)
                 let t = min(1, max(0, raw))
                 // easeInOut cubic: winds up, coasts, settles
                 let eased = t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
                 yaw = fromYaw + (toYaw - fromYaw) * eased
                 pitch = fromPitch + (toPitch - fromPitch) * eased
+                cameraZ = fromZ + (toZ - fromZ) * eased
+                cameraNode.position.z = cameraZ
                 applyOrientation()
                 if t >= 1 {
                     drive = .idle
                     displayLink?.isPaused = true
-                    UIImpactFeedbackGenerator(style: haptic).impactOccurred()
+                    if let haptic { UIImpactFeedbackGenerator(style: haptic).impactOccurred() }
                     onLanded?(code)
                 }
             }

@@ -1,14 +1,17 @@
 import SwiftUI
 import PhotosUI
 
-/// MVP step 3: personal entries — list, add, edit, delete, with photos. Restaurant
-/// field is backed by Google Places autocomplete through the places-proxy function.
+/// The Journal: your meals as a timeline or on the map — tap any meal to see
+/// it in full (photos, rating, notes) and edit or delete it from there.
+/// (The plain list view is gone by design: the timeline IS the log.)
 struct EntriesView: View {
-    enum Mode: String, CaseIterable { case list = "List", timeline = "Timeline", map = "Map" }
+    enum Mode: String, CaseIterable { case timeline = "Timeline", map = "Map" }
 
     @State private var entries: [Entry] = []
     @State private var mode: Mode = EntriesView.initialMode
     @State private var showAdd = false
+    @State private var viewing: Entry?
+    @State private var error: String?
 
     /// Headless test hook: `-journalMode timeline|map` opens that view.
     private static var initialMode: Mode {
@@ -17,10 +20,8 @@ struct EntriesView: View {
         if let i = args.firstIndex(of: "-journalMode"), i + 1 < args.count,
            let m = Mode(rawValue: args[i + 1].capitalized) { return m }
         #endif
-        return .list
+        return .timeline
     }
-    @State private var editing: Entry?
-    @State private var error: String?
 
     var body: some View {
         NavigationStack {
@@ -40,8 +41,12 @@ struct EntriesView: View {
                 .sheet(isPresented: $showAdd) {
                     EntrySheet(mode: .add) { await reload() }
                 }
-                .sheet(item: $editing) { entry in
-                    EntrySheet(mode: .edit(entry)) { await reload() }
+                .sheet(item: $viewing) { entry in
+                    EntryDetailView(entry: entry) { await reload() }
+                        .presentationDetents([.medium, .large])
+                }
+                .overlay(alignment: .bottom) {
+                    if let error { Text(error).font(.caption).foregroundStyle(.red) }
                 }
                 .task { await reload() }
         }
@@ -49,83 +54,16 @@ struct EntriesView: View {
 
     @ViewBuilder private var content: some View {
         switch mode {
-        case .list:
-            List {
-                ForEach(entries) { entry in
-                    Button { editing = entry } label: {
-                        EntryRow(entry: entry)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .onDelete { indexSet in
-                    Task { await delete(at: indexSet) }
-                }
-            }
-            .overlay {
-                if entries.isEmpty {
-                    ContentUnavailableView(
-                        "No meals yet",
-                        systemImage: "fork.knife",
-                        description: Text("The journal starts with dinner.")
-                    )
-                }
-            }
-            .refreshable { await reload() }
-            .overlay(alignment: .bottom) {
-                if let error { Text(error).font(.caption).foregroundStyle(.red) }
-            }
         case .timeline:
-            TimelineView(entries: entries)
+            TimelineView(entries: entries) { viewing = $0 }
         case .map:
-            PhotoMapView(entries: entries)
+            PhotoMapView(entries: entries) { await reload() }
         }
     }
 
     private func reload() async {
         do { entries = try await SupabaseService.shared.myEntries() }
         catch { self.error = error.localizedDescription }
-    }
-
-    private func delete(at indexSet: IndexSet) async {
-        for index in indexSet {
-            try? await SupabaseService.shared.deleteEntry(id: entries[index].id)
-        }
-        await reload()
-    }
-}
-
-struct EntryRow: View {
-    let entry: Entry
-
-    var body: some View {
-        HStack(spacing: 12) {
-            if let first = entry.photos.first {
-                SignedPhotoImage(path: first) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    Color(.secondarySystemBackground)
-                }
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(alignment: .bottomTrailing) {
-                    Text(CountryStore.byCode[entry.countryCode]?.flagEmoji ?? "🌍")
-                        .font(.caption2)
-                }
-            } else {
-                Text(CountryStore.byCode[entry.countryCode]?.flagEmoji ?? "🌍")
-                    .font(.title2)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.restaurantName).font(.headline)
-                Text("\(CountryStore.byCode[entry.countryCode]?.cuisineName ?? entry.countryCode) · \(entry.dateTried)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Text(String(repeating: "★", count: entry.rating))
-                .font(.caption)
-                .foregroundStyle(.orange)
-        }
     }
 }
 

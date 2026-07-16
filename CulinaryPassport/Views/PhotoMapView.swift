@@ -5,6 +5,9 @@ import MapKit
 /// logged via Places carry lat/lng; a photo (if any) rides on the pin.
 struct PhotoMapView: View {
     let entries: [Entry]
+    /// Fires after an entry is edited/deleted from the pin's detail sheet.
+    var onChanged: (() async -> Void)? = nil
+
     @State private var selected: Entry?
 
     private var located: [Entry] {
@@ -34,7 +37,7 @@ struct PhotoMapView: View {
                 }
             }
             .sheet(item: $selected) { entry in
-                MealDetailCard(entry: entry)
+                EntryDetailView(entry: entry) { await onChanged?() }
                     .presentationDetents([.medium, .large])
             }
         }
@@ -65,36 +68,3 @@ private struct PinView: View {
     }
 }
 
-private struct MealDetailCard: View {
-    let entry: Entry
-    private var country: Country? { CountryStore.byCode[entry.countryCode] }
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("\(country?.flagEmoji ?? "🌍") \(entry.restaurantName)")
-                    .font(.title2).bold()
-                Text("\(country?.cuisineName ?? entry.countryCode) · \(entry.dateTried)\(entry.city.map { " · \($0)" } ?? "")")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                Text(String(repeating: "★", count: entry.rating)).foregroundStyle(.orange)
-
-                if let dish = entry.signatureDish, !dish.isEmpty {
-                    Label(dish, systemImage: "fork.knife")
-                }
-                ForEach(entry.photos, id: \.self) { path in
-                    SignedPhotoImage(path: path) { image in
-                        image.resizable().scaledToFill()
-                    } placeholder: {
-                        Color(.secondarySystemBackground)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 200)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                if let notes = entry.notes, !notes.isEmpty {
-                    Text(notes).font(.body)
-                }
-            }
-            .padding()
-        }
-    }
-}

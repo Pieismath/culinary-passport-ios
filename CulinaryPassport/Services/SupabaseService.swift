@@ -99,6 +99,15 @@ final class SupabaseService {
         try await client.from("entries").delete().eq("id", value: id).execute()
     }
 
+    /// Delete an entry AND its stored photos (photo removal is best-effort —
+    /// an orphaned object is invisible behind the private bucket anyway).
+    func deleteEntry(_ entry: Entry) async throws {
+        if !entry.photos.isEmpty {
+            _ = try? await client.storage.from("photos").remove(paths: entry.photos)
+        }
+        try await deleteEntry(id: entry.id)
+    }
+
     func myGroups() async throws -> [Group] {
         try await client.from("groups").select().execute().value
     }

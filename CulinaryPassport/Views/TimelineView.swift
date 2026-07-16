@@ -5,6 +5,8 @@ import SwiftUI
 /// ticks grouped under sticky year headers.
 struct TimelineView: View {
     let entries: [Entry]
+    /// Tap a tick to open the meal (detail sheet with edit/delete).
+    var onSelect: ((Entry) -> Void)? = nil
 
     private var sorted: [Entry] {
         entries.sorted { ($0.dateTried, $0.createdAt) > ($1.dateTried, $1.createdAt) }
@@ -33,7 +35,17 @@ struct TimelineView: View {
                     ForEach(years, id: \.self) { year in
                         Section {
                             ForEach(entries(in: year)) { entry in
-                                TimelineTick(entry: entry)
+                                if let onSelect {
+                                    Button {
+                                        onSelect(entry)
+                                    } label: {
+                                        TimelineTick(entry: entry)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                } else {
+                                    TimelineTick(entry: entry)
+                                }
                             }
                         } header: {
                             Text(year)

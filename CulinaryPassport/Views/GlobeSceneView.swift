@@ -10,6 +10,7 @@ struct GlobeSceneView: View {
     @State private var focusTarget: GlobeCanvas.FocusRequest?
     @State private var focusing = false
     @State private var logCountry: Country?
+    @State private var viewingEntry: Entry?
     @State private var showSearch = false
     @Environment(\.openURL) private var openURL
 
@@ -44,7 +45,8 @@ struct GlobeSceneView: View {
                     authors: vm.usersById,
                     onClose: { selectedCode = nil },
                     onLog: { logCountry = country },
-                    onFindNearby: { findNearby(country) }
+                    onFindNearby: { findNearby(country) },
+                    onSelectEntry: { viewingEntry = $0 }
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .padding()
@@ -82,6 +84,10 @@ struct GlobeSceneView: View {
             EntrySheet(mode: .add, presetCountryCode: country.code) {
                 await vm.load()
             }
+        }
+        .sheet(item: $viewingEntry) { entry in
+            EntryDetailView(entry: entry) { await vm.load() }
+                .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showSearch) {
             CountrySearchSheet(tried: Set(vm.statusByCountry.keys)) { country in
@@ -234,6 +240,7 @@ private struct CountryPanel: View {
     let onClose: () -> Void
     let onLog: () -> Void
     let onFindNearby: () -> Void
+    let onSelectEntry: (Entry) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -269,8 +276,9 @@ private struct CountryPanel: View {
                     .font(.subheadline)
                 if !entries.isEmpty {
                     Divider()
-                    // Every meal from this country — scrolls when it outgrows the card.
-                    CountryEntriesList(entries: entries, authors: authors)
+                    // Every meal from this country — scrolls when it outgrows
+                    // the card; tap one for photos/rating/edit.
+                    CountryEntriesList(entries: entries, authors: authors, onSelect: onSelectEntry)
                 }
             }
 

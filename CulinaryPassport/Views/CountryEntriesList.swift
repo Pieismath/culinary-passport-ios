@@ -8,6 +8,8 @@ struct CountryEntriesList: View {
     /// Author profiles for name + color dot; rows hide the author when the
     /// list only contains one person's meals.
     let authors: [UUID: Profile]
+    /// Tap an entry to open it (rating, photos, notes — EntryDetailView).
+    var onSelect: ((Entry) -> Void)? = nil
 
     private var sorted: [Entry] {
         entries.sorted { $0.dateTried > $1.dateTried } // ISO dates sort lexically
@@ -21,7 +23,22 @@ struct CountryEntriesList: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 10) {
                 ForEach(sorted) { entry in
-                    row(entry)
+                    if let onSelect {
+                        Button {
+                            onSelect(entry)
+                        } label: {
+                            HStack(spacing: 6) {
+                                row(entry)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(Color(.tertiaryLabel))
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        row(entry)
+                    }
                 }
             }
             .padding(.trailing, 2)

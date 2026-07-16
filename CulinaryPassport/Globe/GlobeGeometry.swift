@@ -84,6 +84,43 @@ enum CountryGeometry {
         return nil
     }
 
+    /// Like `country(atLat:lng:)`, but a near-miss (coastal water next to an
+    /// island, a hair outside a border) snaps to the closest country ring
+    /// within `toleranceDegrees` — finger-sized taps aren't laser pointers.
+    static func country(atLat lat: Double, lng: Double, toleranceDegrees tol: Double) -> String? {
+        if let exact = country(atLat: lat, lng: lng) { return exact }
+        guard tol > 0 else { return nil }
+        let cosLat = max(0.05, cos(lat * .pi / 180))
+        var best: (code: String, d2: Double)?
+        for entry in ringIndex
+        where lng >= entry.minLng - tol && lng <= entry.maxLng + tol
+            && lat >= entry.minLat - tol && lat <= entry.maxLat + tol {
+            for p in entry.ring {
+                let dx = (p.x - lng) * cosLat
+                let dy = p.y - lat
+                let d2 = dx * dx + dy * dy
+                if d2 < (best?.d2 ?? tol * tol) { best = (entry.code, d2) }
+            }
+        }
+        return best?.code
+    }
+
+    /// Rough footprint of a country's largest ring in lat-corrected deg² —
+    /// drives how far the camera zooms when flying there.
+    static func sizeHint(_ code: String) -> Double {
+        sizeHints[code] ?? 0
+    }
+
+    private static let sizeHints: [String: Double] = {
+        var result: [String: Double] = [:]
+        for entry in ringIndex {
+            let mid = (entry.minLat + entry.maxLat) / 2
+            let area = (entry.maxLng - entry.minLng) * (entry.maxLat - entry.minLat) * cos(mid * .pi / 180)
+            result[entry.code] = max(result[entry.code] ?? 0, area)
+        }
+        return result
+    }()
+
     /// Standard even-odd ray cast in lng/lat space (Natural Earth polygons are
     /// split at the dateline, so no wrap handling is needed).
     private static func contains(_ ring: Ring, lng: Double, lat: Double) -> Bool {
