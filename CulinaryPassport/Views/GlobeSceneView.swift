@@ -41,6 +41,7 @@ struct GlobeSceneView: View {
                     country: country,
                     tasters: vm.tasterNames(for: code),
                     entries: vm.entriesByCountry[code] ?? [],
+                    authors: vm.usersById,
                     onClose: { selectedCode = nil },
                     onLog: { logCountry = country },
                     onFindNearby: { findNearby(country) }
@@ -229,6 +230,7 @@ private struct CountryPanel: View {
     let country: Country
     let tasters: [String]
     let entries: [Entry]
+    let authors: [UUID: Profile]
     let onClose: () -> Void
     let onLog: () -> Void
     let onFindNearby: () -> Void
@@ -248,6 +250,12 @@ private struct CountryPanel: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
+                if entries.count > 1 {
+                    Text("\(entries.count) meals")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Color(.systemGray5), in: Capsule())
+                }
                 Button { onClose() } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
@@ -261,17 +269,8 @@ private struct CountryPanel: View {
                     .font(.subheadline)
                 if !entries.isEmpty {
                     Divider()
-                    ForEach(entries.prefix(3)) { entry in
-                        HStack {
-                            Text(entry.restaurantName).font(.subheadline)
-                            Spacer()
-                            Text(String(repeating: "★", count: entry.rating))
-                                .font(.caption).foregroundStyle(.orange)
-                        }
-                    }
-                    if entries.count > 3 {
-                        Text("+\(entries.count - 3) more").font(.caption).foregroundStyle(.secondary)
-                    }
+                    // Every meal from this country — scrolls when it outgrows the card.
+                    CountryEntriesList(entries: entries, authors: authors)
                 }
             }
 

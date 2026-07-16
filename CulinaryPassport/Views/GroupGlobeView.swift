@@ -36,6 +36,8 @@ struct GroupGlobeView: View {
                 GroupCountryPanel(
                     country: country,
                     tasters: vm.tasterNames(for: code),
+                    entries: vm.entriesByCountry[code] ?? [],
+                    authors: vm.usersById,
                     memberCount: vm.memberIds.count,
                     onClose: { selected = nil }
                 )
@@ -67,6 +69,7 @@ struct GroupGlobeView: View {
 @MainActor
 final class GroupGlobeViewModel: ObservableObject {
     @Published var statusByCountry: [String: Set<UUID>] = [:]
+    @Published var entriesByCountry: [String: [Entry]] = [:]
     @Published var memberIds: [UUID] = []
     @Published var usersById: [UUID: Profile] = [:]
     @Published var myId: UUID?
@@ -81,12 +84,18 @@ final class GroupGlobeViewModel: ObservableObject {
             memberIds = ids
             let entries = try await SupabaseService.shared.entriesForUsers(ids)
             var status: [String: Set<UUID>] = [:]
-            for e in entries { status[e.countryCode, default: []].insert(e.userId) }
+            var byCountry: [String: [Entry]] = [:]
+            for e in entries {
+                status[e.countryCode, default: []].insert(e.userId)
+                byCountry[e.countryCode, default: []].append(e)
+            }
             statusByCountry = status
+            entriesByCountry = byCountry
             let profiles = try await SupabaseService.shared.profiles(ids: ids)
             usersById = Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, $0) })
         } catch {
             statusByCountry = [:]
+            entriesByCountry = [:]
         }
     }
 
@@ -122,6 +131,8 @@ final class GroupGlobeViewModel: ObservableObject {
 private struct GroupCountryPanel: View {
     let country: Country
     let tasters: [String]
+    let entries: [Entry]
+    let authors: [UUID: Profile]
     let memberCount: Int
     let onClose: () -> Void
 
@@ -135,15 +146,24 @@ private struct GroupCountryPanel: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
+                if entries.count > 1 {
+                    Text("\(entries.count) meals")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Color(.systemGray5), in: Capsule())
+                }
                 Button { onClose() } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
             }
-            if tasters.isEmpty {
+            if entries.isEmpty {
                 Label("No one yet", systemImage: "circle.dashed")
                     .font(.subheadline).foregroundStyle(.secondary)
             } else {
-                Text(tasters.joined(separator: ", ")).font(.subheadline)
+                Divider()
+                // Who ate what, where, when — RLS already scopes this to
+                // entries shared with the group.
+                CountryEntriesList(entries: entries, authors: authors)
             }
         }
         .padding()

@@ -221,17 +221,26 @@ struct GlobeCanvas: UIViewRepresentable {
             return cameraZ / (3.45 * width)
         }
 
+        /// Resolve a touch to a country GEOGRAPHICALLY: any hit on the globe
+        /// (ocean, cap, or border line) gives a sphere point → lat/lng →
+        /// ring lookup. Never depends on which node the ray-cast happened to
+        /// return — cap triangles are back-face-culled out of hit results and
+        /// the borders node shadows everything else, which is why the old
+        /// node-name walk always came up empty.
         private func countryCode(at point: CGPoint?) -> String? {
-            guard let view = scnView, let point else { return nil }
-            let hits = view.hitTest(point, options: [SCNHitTestOption.searchMode: SCNHitTestSearchMode.closest.rawValue])
-            for hit in hits {
-                var node: SCNNode? = hit.node
-                while let n = node {
-                    if let code = n.name, code.count == 2 { return code }
-                    node = n.parent
-                }
-            }
-            return nil
+            guard let view = scnView, let point, let globe = globeNode else { return nil }
+            let hits = view.hitTest(point, options: [
+                SCNHitTestOption.searchMode: SCNHitTestSearchMode.closest.rawValue,
+                SCNHitTestOption.backFaceCulling: false,
+            ])
+            guard let hit = hits.first else { return nil }
+            let world = simd_float3(hit.worldCoordinates.x, hit.worldCoordinates.y, hit.worldCoordinates.z)
+            let local = globe.presentation.simdConvertPosition(world, from: nil)
+            let radius = simd_length(local)
+            guard radius > 0.5 else { return nil }
+            let lat = asin(max(-1, min(1, Double(local.y) / Double(radius)))) * 180 / .pi
+            let lng = atan2(Double(local.x), Double(local.z)) * 180 / .pi
+            return CountryGeometry.country(atLat: lat, lng: lng)
         }
 
         // ── Selection outline ────────────────────────────────────────────────

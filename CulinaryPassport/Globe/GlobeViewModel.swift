@@ -82,7 +82,9 @@ final class GlobeViewModel: ObservableObject {
         }
     }
 
-    /// capColor() port. `selected` gets a small opacity boost, like the web hover.
+    /// capColor() port. `selected` gets a small opacity boost, like the web
+    /// hover — and the tint DEEPENS with every meal logged there (saturating
+    /// around five), so a well-eaten country reads darker at a glance.
     func color(for code: String, selected: Bool) -> UIColor {
         let boost: CGFloat = selected ? 0.22 : 0
         let tasters = statusByCountry[code] ?? []
@@ -90,13 +92,16 @@ final class GlobeViewModel: ObservableObject {
         if tasters.isEmpty {
             return Self.opaque(Self.parchment, 0.55 + boost)
         }
+        let meals = entriesByCountry[code]?.count ?? 1
+        let depth = min(0.28, CGFloat(meals - 1) * 0.07)
+
         if tasters.count >= 2 {
-            return Self.opaque(Self.purple, 0.66 + boost)
+            return Self.opaque(Self.purple, min(0.95, 0.62 + depth + boost))
         }
         // Single taster → their profile color.
         let taster = tasters.first.flatMap { usersById[$0] }
         let base = taster.flatMap { UIColor(hex: $0.color) } ?? Self.amber
-        return Self.opaque(base, 0.62 + boost)
+        return Self.opaque(base, min(0.92, 0.56 + depth + boost))
     }
 
     /// Human-readable "who's tried it" for the detail panel.

@@ -48,6 +48,58 @@ enum CountryGeometry {
         return result
     }
 
+    // ── Point → country lookup (globe tap resolution) ────────────────────────
+    // Hit-testing SceneKit triangles is unreliable for the caps (winding after
+    // sphere projection back-face-culls them out of hit results), so taps
+    // resolve geographically instead: sphere hit point → lat/lng → which
+    // country ring contains it.
+
+    private struct IndexedRing {
+        let code: String
+        let minLng: Double, maxLng: Double, minLat: Double, maxLat: Double
+        let ring: Ring
+    }
+
+    private static let ringIndex: [IndexedRing] = rings.flatMap { code, rings in
+        rings.compactMap { ring -> IndexedRing? in
+            guard ring.count > 3 else { return nil }
+            var minLng = Double.greatestFiniteMagnitude, maxLng = -Double.greatestFiniteMagnitude
+            var minLat = Double.greatestFiniteMagnitude, maxLat = -Double.greatestFiniteMagnitude
+            for p in ring {
+                minLng = min(minLng, p.x); maxLng = max(maxLng, p.x)
+                minLat = min(minLat, p.y); maxLat = max(maxLat, p.y)
+            }
+            return IndexedRing(code: code, minLng: minLng, maxLng: maxLng,
+                               minLat: minLat, maxLat: maxLat, ring: ring)
+        }
+    }
+
+    /// The country whose outer ring contains (lat, lng), or nil for open ocean.
+    static func country(atLat lat: Double, lng: Double) -> String? {
+        for entry in ringIndex
+        where lng >= entry.minLng && lng <= entry.maxLng
+            && lat >= entry.minLat && lat <= entry.maxLat {
+            if contains(entry.ring, lng: lng, lat: lat) { return entry.code }
+        }
+        return nil
+    }
+
+    /// Standard even-odd ray cast in lng/lat space (Natural Earth polygons are
+    /// split at the dateline, so no wrap handling is needed).
+    private static func contains(_ ring: Ring, lng: Double, lat: Double) -> Bool {
+        var inside = false
+        var j = ring.count - 1
+        for i in 0..<ring.count {
+            let a = ring[i], b = ring[j]
+            if (a.y > lat) != (b.y > lat),
+               lng < (b.x - a.x) * (lat - a.y) / (b.y - a.y) + a.x {
+                inside.toggle()
+            }
+            j = i
+        }
+        return inside
+    }
+
     /// Outer ring (index 0) of each polygon; holes are dropped — invisible at this scale.
     private static func outerRings(of geometry: [String: Any]?) -> [Ring] {
         guard let geometry else { return [] }
