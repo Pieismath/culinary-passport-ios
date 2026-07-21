@@ -345,6 +345,13 @@ enum GlobeNodeFactory {
     /// Country caps sit just above the ocean sphere so they don't z-fight.
     static let oceanRadius: Double = 1.0
     static let capRadius: Double = 1.004
+    /// A second copy of every cap renders at this radius. Adjacent triangles
+    /// subdivided to different depths meet at slightly different heights
+    /// ("T-junctions"), and under an oblique view those radial hairlines open
+    /// into visible cracks of ocean. The under-layer — the same mesh, a touch
+    /// lower — is what shows through a crack instead: same country, same
+    /// color, gap invisible.
+    static let underCapRadius: Double = 1.0015
 
     /// A flat ear-clipped triangle chord dips below the sphere at its center; a
     /// large one sinks past the ocean and the ocean pokes through as a hole. We
@@ -389,6 +396,14 @@ enum GlobeNodeFactory {
 
         let node = SCNNode(geometry: geometry)
         node.name = code                       // hit-testing reads this back
+
+        // Crack cover: the SAME geometry object scaled just below the cap, so
+        // recoloring the material recolors both layers together.
+        let under = SCNNode(geometry: geometry)
+        let s = Float(underCapRadius / capRadius)
+        under.scale = SCNVector3(s, s, s)
+        node.addChildNode(under)
+
         return node
     }
 
