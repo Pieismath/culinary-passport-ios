@@ -19,6 +19,8 @@ struct GroupFeedView: View {
     @State private var reloadDebounce: Task<Void, Never>?
     /// Post awaiting an emoji from the picker.
     @State private var reactingTo: GroupPost?
+    /// Meal opened from a message's linked card.
+    @State private var viewingEntry: Entry?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -41,7 +43,8 @@ struct GroupFeedView: View {
                         myId: myId,
                         onToggle: { emoji, on in Task { await react(post: post, emoji: emoji, on: on) } },
                         onAddReaction: { reactingTo = post },
-                        onReply: { replyTo = post }
+                        onReply: { replyTo = post },
+                        onOpenMeal: { viewingEntry = $0 }
                     )
                     .id(post.id)
                     .listRowSeparator(.hidden)
@@ -74,6 +77,10 @@ struct GroupFeedView: View {
             EmojiPickerSheet { emoji in
                 Task { await react(post: post, emoji: emoji, on: true) }
             }
+        }
+        .sheet(item: $viewingEntry) { entry in
+            EntryDetailView(entry: entry, author: authors[entry.userId]) { await reload() }
+                .presentationDetents([.medium, .large])
         }
     }
 
@@ -213,6 +220,7 @@ private struct MessageRow: View {
     let onToggle: (String, Bool) -> Void
     let onAddReaction: () -> Void
     let onReply: () -> Void
+    let onOpenMeal: (Entry) -> Void
 
     @State private var linkedEntry: Entry?
 
@@ -244,8 +252,14 @@ private struct MessageRow: View {
                     .padding(.vertical, 8)
                     .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 14))
             }
-            // When the message links a logged meal, show its compact card.
-            if let entry = linkedEntry { LinkedMealCard(entry: entry) }
+            // When the message links a logged meal, show its compact card —
+            // tap it for the full thing (photos, notes, rating).
+            if let entry = linkedEntry {
+                Button { onOpenMeal(entry) } label: {
+                    LinkedMealCard(entry: entry).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
 
             // Only reactions people actually added show up — each with its
             // count, mine highlighted, tap to add/remove yours.

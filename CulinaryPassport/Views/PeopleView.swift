@@ -7,6 +7,7 @@ struct PeopleView: View {
     @State private var results: [Profile] = []
     @State private var following: Set<UUID> = []
     @State private var feed: [FeedItem] = []
+    @State private var viewing: FeedItem?
     @State private var status: String?
 
     private var searching: Bool { query.trimmingCharacters(in: .whitespaces).count >= 2 }
@@ -29,7 +30,13 @@ struct PeopleView: View {
                 } else {
                     Section("Discover") {
                         ForEach(feed) { item in
-                            FeedRow(item: item)
+                            Button {
+                                viewing = item
+                            } label: {
+                                FeedRow(item: item)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -49,6 +56,10 @@ struct PeopleView: View {
                         description: Text("Public meals from the community will show up here.")
                     )
                 }
+            }
+            .sheet(item: $viewing) { item in
+                EntryDetailView(entry: item.entry, author: item.author)
+                    .presentationDetents([.medium, .large])
             }
             .searchable(text: $query, prompt: "Name or username")
             .onChange(of: query) { Task { await search() } }

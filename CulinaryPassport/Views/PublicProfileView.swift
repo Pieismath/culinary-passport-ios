@@ -9,6 +9,8 @@ struct PublicProfileView: View {
     @State private var followingCount = 0
     @State private var isFollowing = false
     @State private var triedCodes: [String] = []
+    @State private var entries: [Entry] = []
+    @State private var viewing: Entry?
     @State private var busy = false
     @State private var loaded = false
 
@@ -61,8 +63,30 @@ struct PublicProfileView: View {
                     FlagWrap(codes: triedCodes)
                         .padding(.horizontal)
                 }
+
+                // Their meals — tap one for the full card.
+                if !entries.isEmpty {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Meals")
+                            .font(.headline)
+                            .padding(.horizontal)
+                            .padding(.bottom, 6)
+                        ForEach(entries) { entry in
+                            Button { viewing = entry } label: {
+                                PublicMealRow(entry: entry).contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            Divider().padding(.leading, 60)
+                        }
+                    }
+                    .padding(.top, 8)
+                }
             }
             .padding(.bottom, 24)
+        }
+        .sheet(item: $viewing) { entry in
+            EntryDetailView(entry: entry, author: profile)
+                .presentationDetents([.medium, .large])
         }
         .navigationTitle(profile.username.map { "@\($0)" } ?? profile.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -86,6 +110,7 @@ struct PublicProfileView: View {
         followingCount = c?.following ?? 0
         isFollowing = f.contains(profile.id)
         triedCodes = Array(Set(e.map(\.countryCode))).sorted()
+        self.entries = e
     }
 
     private func toggleFollow() async {
@@ -112,5 +137,41 @@ private struct FlagWrap: View {
                     .font(.title3)
             }
         }
+    }
+}
+
+/// One of someone else's meals in their profile list.
+private struct PublicMealRow: View {
+    let entry: Entry
+    private var country: Country? { CountryStore.byCode[entry.countryCode] }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if let first = entry.photos.first {
+                SignedPhotoImage(path: first) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Color(.secondarySystemBackground)
+                }
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                Text(country?.flagEmoji ?? "🌍")
+                    .font(.title2)
+                    .frame(width: 44, height: 44)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.restaurantName).font(.subheadline.weight(.medium))
+                Text([country?.cuisineName, entry.city].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(Color(.secondaryLabel))
+            }
+            Spacer()
+            Text(String(repeating: "★", count: entry.rating))
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 7)
     }
 }
