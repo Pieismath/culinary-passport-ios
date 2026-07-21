@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// v1.1 item 9 — the Journal as a timeline. Ports the web TimelineView to a
-/// native vertical layout: a meal-frequency sparkline on top, then entries as
+/// native vertical layout: entries as
 /// ticks grouped under sticky year headers.
 struct TimelineView: View {
     let entries: [Entry]
@@ -27,11 +27,6 @@ struct TimelineView: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    Sparkline(entries: entries)
-                        .frame(height: 56)
-                        .padding(.horizontal)
-                        .padding(.bottom, 8)
-
                     ForEach(years, id: \.self) { year in
                         Section {
                             ForEach(entries(in: year)) { entry in
@@ -99,54 +94,3 @@ private struct TimelineTick: View {
     }
 }
 
-/// Meals-per-month area sparkline across the full logged span.
-private struct Sparkline: View {
-    let entries: [Entry]
-
-    var body: some View {
-        let counts = monthlyCounts()
-        Canvas { context, size in
-            guard counts.count > 1, let maxC = counts.map(\.1).max(), maxC > 0 else { return }
-            let stepX = size.width / CGFloat(counts.count - 1)
-            func point(_ i: Int) -> CGPoint {
-                let v = CGFloat(counts[i].1) / CGFloat(maxC)
-                return CGPoint(x: CGFloat(i) * stepX, y: size.height - v * (size.height - 4) - 2)
-            }
-            var area = Path()
-            area.move(to: CGPoint(x: 0, y: size.height))
-            for i in counts.indices { area.addLine(to: point(i)) }
-            area.addLine(to: CGPoint(x: size.width, y: size.height))
-            area.closeSubpath()
-            context.fill(area, with: .color(.accentColor.opacity(0.18)))
-
-            var line = Path()
-            for i in counts.indices { i == 0 ? line.move(to: point(i)) : line.addLine(to: point(i)) }
-            context.stroke(line, with: .color(.accentColor), lineWidth: 2)
-        }
-        .overlay(alignment: .topLeading) {
-            Text("\(entries.count) meals · meals per month")
-                .font(.caption2).foregroundStyle(.secondary)
-        }
-    }
-
-    /// Continuous month buckets from first to last entry (gaps count as 0).
-    private func monthlyCounts() -> [(String, Int)] {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
-        let dates = entries.compactMap { f.date(from: $0.dateTried) }.sorted()
-        guard let first = dates.first, let last = dates.last else { return [] }
-        let cal = Calendar.current
-        var counts: [String: Int] = [:]
-        let key = DateFormatter(); key.dateFormat = "yyyy-MM"
-        for d in dates { counts[key.string(from: d), default: 0] += 1 }
-
-        var result: [(String, Int)] = []
-        var cursor = cal.date(from: cal.dateComponents([.year, .month], from: first)) ?? first
-        let end = cal.date(from: cal.dateComponents([.year, .month], from: last)) ?? last
-        while cursor <= end {
-            let k = key.string(from: cursor)
-            result.append((k, counts[k] ?? 0))
-            cursor = cal.date(byAdding: .month, value: 1, to: cursor) ?? end.addingTimeInterval(1)
-        }
-        return result
-    }
-}

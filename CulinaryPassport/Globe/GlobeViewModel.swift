@@ -43,9 +43,8 @@ final class GlobeViewModel: ObservableObject {
         loading = true
         defer { loading = false }
         do {
-            // RLS scopes this to entries the signed-in user may see (their own +
-            // anything shared). Enough to color a personal globe; group/together
-            // views layer on top later.
+            // This globe is YOURS — myEntries() is own-only. Shared eating
+            // lives on the group globe.
             let entries = try await SupabaseService.shared.myEntries()
             guard let me = try await SupabaseService.shared.myProfile() else {
                 // Profile row is gone (deleted user / stale session) — sign out

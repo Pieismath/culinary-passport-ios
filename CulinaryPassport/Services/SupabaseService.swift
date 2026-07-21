@@ -51,8 +51,19 @@ final class SupabaseService {
 
     // ── Data access (grow these as views land) ──────────────────────────────
 
+    /// Strictly the signed-in user's OWN entries — their journal, their globe,
+    /// their profile numbers.
+    ///
+    /// Filtered server-side rather than trusting RLS to mean "mine": the
+    /// entries policy deliberately also returns public and group-shared meals
+    /// from other people, which belongs on the group globe and the discover
+    /// feed (`entriesForUsers`, `discoverFeed`) — never in "my journal".
     func myEntries() async throws -> [Entry] {
-        try await client.from("entries").select().order("date_tried", ascending: false).execute().value
+        let session = try await client.auth.session
+        return try await client.from("entries").select()
+            .eq("user_id", value: session.user.id)
+            .order("date_tried", ascending: false)
+            .execute().value
     }
 
     func addEntry(_ entry: NewEntry) async throws {
@@ -376,6 +387,29 @@ final class SupabaseService {
         let byId = Dictionary(uniqueKeysWithValues: publicAuthors.map { ($0.id, $0) })
         return entries.compactMap { e in byId[e.userId].map { FeedItem(entry: e, author: $0) } }
             .prefix(limit).map { $0 }
+    }
+
+    /// Well-rated meals from people the user follows or shares a group with —
+    /// the raw material for restaurant recommendations. RLS already limits this
+    /// to entries those people chose to share.
+    func entriesFromMyPeople(limit: Int = 300) async throws -> (entries: [Entry], people: [UUID: Profile]) {
+        let session = try await client.auth.session
+        var ids = Set<UUID>()
+        ids.formUnion(try await followingIds(userId: session.user.id))
+        for group in (try? await myGroups()) ?? [] {
+            ids.formUnion((try? await groupMemberIds(groupId: group.id)) ?? [])
+        }
+        ids.remove(session.user.id)
+        guard !ids.isEmpty else { return ([], [:]) }
+
+        let entries: [Entry] = try await client.from("entries").select()
+            .in("user_id", values: Array(ids))
+            .gte("rating", value: 4)
+            .order("date_tried", ascending: false)
+            .limit(limit)
+            .execute().value
+        let profiles = try await profiles(ids: Array(Set(entries.map(\.userId))))
+        return (entries, Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, $0) }))
     }
 
     func searchPublicProfiles(_ query: String) async throws -> [Profile] {

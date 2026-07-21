@@ -117,15 +117,9 @@ struct GlobeSceneView: View {
     // ── Progress chips (web header rings, phone-sized) ───────────────────────
 
     private var triedCount: Int { vm.statusByCountry.count }
-    private var togetherCount: Int { vm.statusByCountry.values.filter { $0.count >= 2 }.count }
 
     private var progressChips: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ChipLabel(text: "\(triedCount) of \(CountryStore.all.count) cuisines")
-            if togetherCount > 0 {
-                ChipLabel(text: "💜 \(togetherCount) together")
-            }
-        }
+        ChipLabel(text: "\(triedCount) of \(CountryStore.all.count) cuisines")
     }
 
     // ── Spin ─────────────────────────────────────────────────────────────────

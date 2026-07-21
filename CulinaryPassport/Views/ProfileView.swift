@@ -12,7 +12,14 @@ struct ProfileView: View {
     @State private var profile: Profile?
     @State private var showEdit = false
     @State private var sheet: ProfileSheet?
+    @State private var cropping: PickedImage?
     @State private var entries: [Entry] = []
+
+    /// Wrapper so `.sheet(item:)` can carry the picked photo into the cropper.
+    struct PickedImage: Identifiable {
+        let id = UUID()
+        let image: UIImage
+    }
     @State private var insights = Insights()
     @State private var follows: (followers: Int, following: Int) = (0, 0)
 
@@ -47,7 +54,12 @@ struct ProfileView: View {
                     await load()
                 }
             }
-            .onChange(of: pickedItem) { Task { await uploadPhoto() } }
+            .onChange(of: pickedItem) { Task { await loadPicked() } }
+            .sheet(item: $cropping) { picked in
+                PhotoCropSheet(image: picked.image) { jpeg in
+                    Task { await upload(jpeg) }
+                }
+            }
             .sheet(isPresented: $showEdit) {
                 if let profile {
                     ProfileEditSheet(profile: profile) { await load() }
@@ -247,26 +259,29 @@ struct ProfileView: View {
             profile = me
             avatarURL = me.avatarUrl.flatMap(URL.init)
             follows = (try? await SupabaseService.shared.followCounts(userId: me.id)) ?? (0, 0)
-            // RLS also returns group-shared entries; these numbers are MINE.
-            entries = ((try? await SupabaseService.shared.myEntries()) ?? [])
-                .filter { $0.userId == me.id }
+            entries = (try? await SupabaseService.shared.myEntries()) ?? []
             insights = Insights(entries: entries)
         } catch {
             // Transient load failure — leave the screen as-is (don't sign out).
         }
     }
 
-    private func uploadPhoto() async {
+    /// Picked from the library → hand to the cropper; upload happens on "Use photo".
+    private func loadPicked() async {
         guard let pickedItem else { return }
+        defer { self.pickedItem = nil }
+        guard let data = try? await pickedItem.loadTransferable(type: Data.self),
+              let image = UIImage(data: data) else {
+            status = "Couldn't read that photo"
+            return
+        }
+        cropping = PickedImage(image: image)
+    }
+
+    private func upload(_ jpeg: Data) async {
         busy = true
-        defer { busy = false; self.pickedItem = nil }
+        defer { busy = false }
         do {
-            guard let data = try await pickedItem.loadTransferable(type: Data.self),
-                  let image = UIImage(data: data),
-                  let jpeg = ImageTools.squareJPEG(image, side: 512) else {
-                status = "Couldn't read that photo"
-                return
-            }
             let url = try await SupabaseService.shared.uploadAvatar(jpeg)
             // Bust AsyncImage's cache: a new path each upload already differs,
             // but this also survives an identical re-pick.
