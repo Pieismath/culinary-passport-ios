@@ -67,7 +67,14 @@ struct GlobeSceneView: View {
             .padding(.top, 8)
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selectedCode)
-        .task { await vm.load() }
+        // Same reason as ProfileView: a single on-appear load can lose the race
+        // with sign-in and leave an empty globe.
+        .task {
+            for await state in SupabaseService.shared.client.auth.authStateChanges
+            where state.session != nil {
+                await vm.load()
+            }
+        }
         #if DEBUG
         // Headless smoke tests: `-spin` runs the dice flow; `-fly XX` flies to
         // a country code the way a search pick does; `-search` opens the sheet.

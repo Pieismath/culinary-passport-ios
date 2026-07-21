@@ -1,28 +1,24 @@
 import SwiftUI
 import PhotosUI
 
-/// Your profile: photo, identity, the numbers, and the ways in.
-/// The avatar is a photo YOU choose — the AI-generated portrait pipeline was
-/// dropped (it cost an API key per user and a stylized face isn't what this
-/// app is about); unlockable accessories still composite over the photo.
+/// Your profile: photo, identity, and the numbers worth bragging about.
+/// The avatar is a photo you pick — the AI selfie→portrait pipeline was
+/// retired (per-user API cost, and a stylized face isn't what this app is).
 struct ProfileView: View {
     @State private var avatarURL: URL?
     @State private var pickedItem: PhotosPickerItem?
     @State private var busy = false
     @State private var status: String?
-    @State private var equipped = EquippedStore.load()
     @State private var profile: Profile?
     @State private var showEdit = false
-    @State private var stats = Stats()
+    @State private var sheet: ProfileSheet?
+    @State private var entries: [Entry] = []
+    @State private var insights = Insights()
     @State private var follows: (followers: Int, following: Int) = (0, 0)
 
-    struct Stats {
-        var meals = 0
-        var countries = 0
-        var continents = 0
-        var rare = 0
-        var streakWeeks = 0
-        var thisYear = 0
+    enum ProfileSheet: String, Identifiable {
+        case followers, following, cuisines
+        var id: String { rawValue }
     }
 
     var body: some View {
@@ -30,23 +26,10 @@ struct ProfileView: View {
             ScrollView {
                 VStack(spacing: 14) {
                     header
-                    countRows
-                    cards
+                    worldCard
+                    insightCards
                     actionRows
-
-                    if let status {
-                        Text(status)
-                            .font(.caption)
-                            .foregroundStyle(Color(.secondaryLabel))
-                            .multilineTextAlignment(.center)
-                    }
-
-                    Button("Sign out") {
-                        Task { try? await SupabaseService.shared.client.auth.signOut() }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(Color(.secondaryLabel))
-                    .padding(.top, 4)
+                    signOut
                 }
                 .padding(.horizontal)
                 .padding(.bottom, 24)
@@ -54,24 +37,43 @@ struct ProfileView: View {
             .background(Color(red: 0.972, green: 0.960, blue: 0.930).ignoresSafeArea())
             .navigationTitle("Profile")
             .navigationBarTitleDisplayMode(.inline)
-            .task { await load() }
-            .onAppear { equipped = EquippedStore.load() } // reflect customizer changes on return
+            .refreshable { await load() }
+            // Reload whenever the session changes. `.task` alone fires once on
+            // appear, which can lose a race with sign-in (or an expired token
+            // being refreshed) and leave the screen showing zeros forever.
+            .task {
+                for await state in SupabaseService.shared.client.auth.authStateChanges
+                where state.session != nil {
+                    await load()
+                }
+            }
             .onChange(of: pickedItem) { Task { await uploadPhoto() } }
             .sheet(isPresented: $showEdit) {
                 if let profile {
                     ProfileEditSheet(profile: profile) { await load() }
                 }
             }
+            .sheet(item: $sheet) { which in
+                switch which {
+                case .followers:
+                    PeopleListSheet(title: "Followers", ids: { try await SupabaseService.shared.followerIds(userId: $0) },
+                                    userId: profile?.id)
+                case .following:
+                    PeopleListSheet(title: "Following", ids: { try await SupabaseService.shared.followingIds(userId: $0) },
+                                    userId: profile?.id)
+                case .cuisines:
+                    CuisineListSheet(entries: entries)
+                }
+            }
         }
     }
 
-    // ── Header: photo, identity, follow counts, actions ──────────────────────
+    // ── Header ───────────────────────────────────────────────────────────────
 
     private var header: some View {
         VStack(spacing: 10) {
             ZStack(alignment: .bottomTrailing) {
-                ComposedAvatarView(url: avatarURL, equipped: equipped, size: 104)
-                    .id(equipped)
+                ProfilePhotoView(url: avatarURL, size: 104)
                     .background(Circle().fill(.white).padding(-4))
                     .overlay(Circle().stroke(.white, lineWidth: 3).padding(-4))
                     .shadow(color: .black.opacity(0.10), radius: 8, y: 3)
@@ -110,30 +112,33 @@ struct ProfileView: View {
             }
 
             HStack(spacing: 0) {
-                CountColumn(value: follows.followers, label: "Followers")
-                CountColumn(value: follows.following, label: "Following")
-                CountColumn(value: stats.countries, label: "Cuisines")
+                CountColumn(value: follows.followers, label: "Followers") { sheet = .followers }
+                CountColumn(value: follows.following, label: "Following") { sheet = .following }
+                CountColumn(value: insights.countries, label: "Cuisines") { sheet = .cuisines }
             }
             .padding(.top, 2)
 
             HStack(spacing: 8) {
                 Button { showEdit = true } label: {
-                    Text("Edit profile")
-                        .font(.subheadline.weight(.medium))
-                        .frame(maxWidth: .infinity)
+                    Text("Edit profile").font(.subheadline.weight(.medium)).frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
 
                 ShareLink(item: shareText) {
-                    Text("Share profile")
-                        .font(.subheadline.weight(.medium))
-                        .frame(maxWidth: .infinity)
+                    Text("Share profile").font(.subheadline.weight(.medium)).frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
             .padding(.top, 2)
+
+            if let status {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
         }
         .padding(.vertical, 14)
         .padding(.horizontal, 16)
@@ -144,31 +149,58 @@ struct ProfileView: View {
 
     private var shareText: String {
         let handle = profile?.username.map { "@\($0)" } ?? profile?.name ?? "me"
-        return "\(handle) has eaten \(stats.countries) of the world's cuisines on Culinary Passport."
+        return "\(handle) has eaten \(insights.countries) of the world's cuisines on Culinary Passport."
     }
 
-    // ── Counts (the Been / Want to try shape) ────────────────────────────────
+    // ── How much of the world you've eaten ───────────────────────────────────
 
-    private var countRows: some View {
-        VStack(spacing: 0) {
-            CountRow(icon: "checkmark.circle", tint: .green, title: "Meals logged", value: stats.meals)
-            Divider().padding(.leading, 50)
-            CountRow(icon: "globe.europe.africa", tint: .blue, title: "Continents", value: stats.continents)
-            Divider().padding(.leading, 50)
-            CountRow(icon: "sparkles", tint: .orange, title: "Rare finds", value: stats.rare)
+    private var worldCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("World eaten").font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(insights.percentText)
+                    .font(.title3.bold())
+                    .monospacedDigit()
+                    .foregroundStyle(Color.accentColor)
+            }
+
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color(.systemGray5))
+                    Capsule()
+                        .fill(LinearGradient(colors: [.green, .teal], startPoint: .leading, endPoint: .trailing))
+                        .frame(width: max(4, proxy.size.width * insights.fraction))
+                }
+            }
+            .frame(height: 8)
+
+            Text("\(insights.countries) of \(CountryStore.all.count) cuisines · \(insights.meals) meals · \(insights.continents) of 6 continents")
+                .font(.caption)
+                .foregroundStyle(Color(.secondaryLabel))
         }
+        .padding(14)
+        .frame(maxWidth: .infinity)
         .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
         .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
     }
 
-    // ── Cards ────────────────────────────────────────────────────────────────
+    // ── The two facts people actually want to see ────────────────────────────
 
-    private var cards: some View {
+    private var insightCards: some View {
         HStack(spacing: 10) {
-            StatCard(icon: "flame.fill", tint: .orange,
-                     value: "\(stats.streakWeeks)", caption: stats.streakWeeks == 1 ? "week streak" : "weeks streak")
-            StatCard(icon: "calendar", tint: .purple,
-                     value: "\(stats.thisYear)", caption: "meals this year")
+            InsightCard(
+                caption: "Go-to cuisine",
+                headline: insights.topCuisine.map { "\($0.flag) \($0.name)" } ?? "—",
+                detail: insights.topCuisine.map {
+                    "\($0.count) meal\($0.count == 1 ? "" : "s") · ★\(String(format: "%.1f", $0.avgRating))"
+                } ?? "Log a few meals"
+            )
+            InsightCard(
+                caption: insights.second?.caption ?? "Rarest find",
+                headline: insights.second.map { "\($0.cuisine.flag) \($0.cuisine.name)" } ?? "—",
+                detail: insights.second?.detail ?? "Try somewhere unexpected"
+            )
         }
     }
 
@@ -180,20 +212,23 @@ struct ProfileView: View {
                 ActionRow(icon: "sparkles", tint: .pink, title: "Year in review")
             }
             .buttonStyle(.plain)
-
-            Divider().padding(.leading, 56)
-
-            NavigationLink {
-                AvatarCustomizeView(avatarURL: avatarURL)
-            } label: {
-                ActionRow(icon: "wand.and.stars", tint: .purple, title: "Customize avatar")
-            }
-            .buttonStyle(.plain)
-            .disabled(avatarURL == nil)
-            .opacity(avatarURL == nil ? 0.45 : 1)
         }
         .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
         .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
+    }
+
+    private var signOut: some View {
+        Button(role: .destructive) {
+            Task { try? await SupabaseService.shared.client.auth.signOut() }
+        } label: {
+            Text("Sign out")
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+        }
+        .buttonStyle(.bordered)
+        .tint(.red)
+        .padding(.top, 4)
     }
 
     // ── Data ─────────────────────────────────────────────────────────────────
@@ -206,50 +241,15 @@ struct ProfileView: View {
                 return
             }
             profile = me
-            if let urlString = me.avatarUrl { avatarURL = URL(string: urlString) }
+            avatarURL = me.avatarUrl.flatMap(URL.init)
             follows = (try? await SupabaseService.shared.followCounts(userId: me.id)) ?? (0, 0)
-
-            // RLS also returns group-shared entries; the profile counts should
-            // only reflect MY meals.
-            let mine = ((try? await SupabaseService.shared.myEntries()) ?? [])
+            // RLS also returns group-shared entries; these numbers are MINE.
+            entries = ((try? await SupabaseService.shared.myEntries()) ?? [])
                 .filter { $0.userId == me.id }
-            stats = Self.summarize(mine)
+            insights = Insights(entries: entries)
         } catch {
             // Transient load failure — leave the screen as-is (don't sign out).
         }
-    }
-
-    static func summarize(_ entries: [Entry]) -> Stats {
-        var s = Stats()
-        s.meals = entries.count
-        let codes = Set(entries.map(\.countryCode))
-        s.countries = codes.count
-        s.continents = Set(codes.compactMap { CountryStore.byCode[$0]?.continent }).count
-        s.rare = codes.filter { Country.rareCodes.contains($0) }.count
-
-        let calendar = Calendar.current
-        let year = calendar.component(.year, from: Date())
-        let parser = DateFormatter()
-        parser.dateFormat = "yyyy-MM-dd"
-        parser.locale = Locale(identifier: "en_US_POSIX")
-        let dates = entries.compactMap { parser.date(from: $0.dateTried) }
-        s.thisYear = dates.filter { calendar.component(.year, from: $0) == year }.count
-
-        // Consecutive weeks with at least one meal, counting back from this
-        // week (a not-yet-eaten current week doesn't break the streak).
-        let weeks = Set(dates.compactMap {
-            calendar.dateInterval(of: .weekOfYear, for: $0)?.start
-        })
-        guard var cursor = calendar.dateInterval(of: .weekOfYear, for: Date())?.start else { return s }
-        if !weeks.contains(cursor) {
-            cursor = calendar.date(byAdding: .weekOfYear, value: -1, to: cursor) ?? cursor
-        }
-        while weeks.contains(cursor) {
-            s.streakWeeks += 1
-            guard let previous = calendar.date(byAdding: .weekOfYear, value: -1, to: cursor) else { break }
-            cursor = previous
-        }
-        return s
     }
 
     private func uploadPhoto() async {
@@ -264,7 +264,9 @@ struct ProfileView: View {
                 return
             }
             let url = try await SupabaseService.shared.uploadAvatar(jpeg)
-            avatarURL = URL(string: url)
+            // Bust AsyncImage's cache: a new path each upload already differs,
+            // but this also survives an identical re-pick.
+            avatarURL = URL(string: "\(url)?v=\(Int(Date().timeIntervalSince1970))")
             status = nil
         } catch {
             status = error.localizedDescription
@@ -272,51 +274,205 @@ struct ProfileView: View {
     }
 }
 
+// ── Insights ────────────────────────────────────────────────────────────────
+
+struct Insights {
+    struct Cuisine { let code: String; let flag: String; let name: String; let count: Int; let avgRating: Double }
+
+    var meals = 0
+    var countries = 0
+    var continents = 0
+    var rare = 0
+    var topCuisine: Cuisine?
+    /// The second card — always a DIFFERENT cuisine from the first, so the two
+    /// never show the same country: a rare find if there is one, otherwise the
+    /// best-rated of the rest.
+    var second: (caption: String, cuisine: Cuisine, detail: String)?
+
+    var fraction: Double {
+        guard CountryStore.all.count > 0 else { return 0 }
+        return min(1, Double(countries) / Double(CountryStore.all.count))
+    }
+
+    var percentText: String {
+        let pct = fraction * 100
+        return pct > 0 && pct < 1 ? "<1%" : "\(Int(pct.rounded()))%"
+    }
+
+    init() {}
+
+    init(entries: [Entry]) {
+        meals = entries.count
+        let byCountry = Dictionary(grouping: entries, by: \.countryCode)
+        countries = byCountry.count
+        continents = Set(byCountry.keys.compactMap { CountryStore.byCode[$0]?.continent }).count
+        let rareTried = byCountry.keys.filter { Country.rareCodes.contains($0) }
+        rare = rareTried.count
+
+        func cuisine(_ code: String) -> Cuisine? {
+            guard let country = CountryStore.byCode[code], let rows = byCountry[code] else { return nil }
+            let avg = rows.isEmpty ? 0 : Double(rows.map(\.rating).reduce(0, +)) / Double(rows.count)
+            return Cuisine(code: code, flag: country.flagEmoji, name: country.cuisineName,
+                           count: rows.count, avgRating: avg)
+        }
+
+        // Most-eaten cuisine; ties break on the higher average rating.
+        topCuisine = byCountry.keys
+            .compactMap(cuisine)
+            .max { a, b in (a.count, a.avgRating) < (b.count, b.avgRating) }
+
+        let others = byCountry.keys
+            .filter { $0 != topCuisine?.code }
+            .compactMap(cuisine)
+
+        if let rarest = others.filter({ Country.rareCodes.contains($0.code) })
+            .max(by: { $0.count < $1.count }) {
+            second = ("Rarest find", rarest, "\(rare) of \(Country.rareCodes.count) rare cuisines")
+        } else if let best = others.max(by: { ($0.avgRating, $0.count) < ($1.avgRating, $1.count) }) {
+            second = ("Best rated", best,
+                      "★\(String(format: "%.1f", best.avgRating)) across \(best.count) meal\(best.count == 1 ? "" : "s")")
+        }
+    }
+}
+
+// ── Sheets ──────────────────────────────────────────────────────────────────
+
+/// Followers / following. Ids come from the follows table; the profiles they
+/// resolve to are whatever the profiles policy lets this user see.
+private struct PeopleListSheet: View {
+    let title: String
+    let ids: (UUID) async throws -> [UUID]
+    let userId: UUID?
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var people: [Profile] = []
+    @State private var loaded = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(people) { person in
+                    NavigationLink {
+                        PublicProfileView(profile: person)
+                    } label: {
+                        HStack(spacing: 12) {
+                            ProfilePhotoView(url: person.avatarUrl.flatMap(URL.init), size: 38)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(person.name)
+                                if let username = person.username, !username.isEmpty {
+                                    Text("@\(username)").font(.caption)
+                                        .foregroundStyle(Color(.secondaryLabel))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .overlay {
+                if loaded && people.isEmpty {
+                    ContentUnavailableView(
+                        title == "Followers" ? "No followers yet" : "Not following anyone",
+                        systemImage: "person.2",
+                        description: Text("Find people from the People tab.")
+                    )
+                }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+            .task {
+                guard let userId else { loaded = true; return }
+                let list = (try? await ids(userId)) ?? []
+                people = ((try? await SupabaseService.shared.profiles(ids: list)) ?? [])
+                    .sorted { $0.name < $1.name }
+                loaded = true
+            }
+        }
+    }
+}
+
+/// Every cuisine you've tried, most-eaten first.
+private struct CuisineListSheet: View {
+    let entries: [Entry]
+    @Environment(\.dismiss) private var dismiss
+
+    private var rows: [(country: Country, count: Int, avg: Double)] {
+        Dictionary(grouping: entries, by: \.countryCode).compactMap { code, rows in
+            guard let country = CountryStore.byCode[code] else { return nil }
+            let avg = Double(rows.map(\.rating).reduce(0, +)) / Double(rows.count)
+            return (country, rows.count, avg)
+        }
+        .sorted { ($0.count, $0.country.name) > ($1.count, $1.country.name) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(rows, id: \.country.code) { row in
+                HStack(spacing: 12) {
+                    Text(row.country.flagEmoji).font(.title2)
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 4) {
+                            Text(row.country.cuisineName)
+                            if row.country.rare {
+                                Image(systemName: "sparkles").font(.caption2).foregroundStyle(.orange)
+                            }
+                        }
+                        Text("\(row.count) meal\(row.count == 1 ? "" : "s") · ★\(String(format: "%.1f", row.avg))")
+                            .font(.caption)
+                            .foregroundStyle(Color(.secondaryLabel))
+                    }
+                    Spacer()
+                }
+            }
+            .overlay {
+                if rows.isEmpty {
+                    ContentUnavailableView(
+                        "No cuisines yet",
+                        systemImage: "fork.knife",
+                        description: Text("Log a meal to start filling the globe.")
+                    )
+                }
+            }
+            .navigationTitle("Cuisines tried")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+}
+
+// ── Small pieces ────────────────────────────────────────────────────────────
+
 private struct CountColumn: View {
     let value: Int
     let label: String
+    let action: () -> Void
 
     var body: some View {
-        VStack(spacing: 1) {
-            Text("\(value)").font(.headline).monospacedDigit()
-            Text(label).font(.caption).foregroundStyle(Color(.secondaryLabel))
+        Button(action: action) {
+            VStack(spacing: 1) {
+                Text("\(value)").font(.headline).monospacedDigit().foregroundStyle(.primary)
+                Text(label).font(.caption).foregroundStyle(Color(.secondaryLabel))
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity)
+        .buttonStyle(.plain)
     }
 }
 
-private struct CountRow: View {
-    let icon: String
-    let tint: Color
-    let title: String
-    let value: Int
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(tint)
-                .frame(width: 26)
-            Text(title)
-            Spacer()
-            Text("\(value)").font(.headline).monospacedDigit()
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-    }
-}
-
-private struct StatCard: View {
-    let icon: String
-    let tint: Color
-    let value: String
+private struct InsightCard: View {
     let caption: String
+    let headline: String
+    let detail: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Image(systemName: icon).font(.subheadline).foregroundStyle(tint)
-            Text(value).font(.title3.bold()).monospacedDigit()
-            Text(caption).font(.caption).foregroundStyle(Color(.secondaryLabel))
+            Text(caption.uppercased())
+                .font(.caption2.weight(.semibold))
+                .tracking(0.6)
+                .foregroundStyle(Color(.tertiaryLabel))
+            Text(headline).font(.callout.weight(.semibold)).lineLimit(1)
+            Text(detail).font(.caption).foregroundStyle(Color(.secondaryLabel)).lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)

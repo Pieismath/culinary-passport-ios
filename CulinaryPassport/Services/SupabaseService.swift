@@ -83,7 +83,7 @@ final class SupabaseService {
     /// URLs) — the bucket is private and gated on entry visibility.
     func uploadPhoto(_ jpeg: Data) async throws -> String {
         let session = try await client.auth.session
-        let path = "\(session.user.id.uuidString)/\(UUID().uuidString).jpg"
+        let path = "\(session.user.id.uuidString.lowercased())/\(UUID().uuidString.lowercased()).jpg"
         try await client.storage.from("photos").upload(
             path, data: jpeg,
             options: FileOptions(cacheControl: "3600", contentType: "image/jpeg", upsert: false)
@@ -155,7 +155,7 @@ final class SupabaseService {
     /// Unique name per upload — the bucket has no UPDATE policy, so overwriting
     /// in place isn't possible (old covers are orphaned, which is fine).
     func uploadGroupCover(groupId: UUID, _ jpeg: Data) async throws -> String {
-        let path = "\(groupId.uuidString)/\(UUID().uuidString).jpg"
+        let path = "\(groupId.uuidString.lowercased())/\(UUID().uuidString.lowercased()).jpg"
         try await client.storage.from("group-covers").upload(
             path, data: jpeg,
             options: FileOptions(cacheControl: "3600", contentType: "image/jpeg", upsert: false)
@@ -288,7 +288,7 @@ final class SupabaseService {
     /// Returns the public URL now stored on the profile.
     func uploadAvatar(_ jpeg: Data) async throws -> String {
         let session = try await client.auth.session
-        let path = "\(session.user.id.uuidString)/\(UUID().uuidString).jpg"
+        let path = "\(session.user.id.uuidString.lowercased())/\(UUID().uuidString.lowercased()).jpg"
         try await client.storage.from("avatars").upload(
             path, data: jpeg,
             options: FileOptions(cacheControl: "3600", contentType: "image/jpeg", upsert: false)
@@ -300,6 +300,21 @@ final class SupabaseService {
             .eq("id", value: session.user.id)
             .execute()
         return url
+    }
+
+    /// Who follows this user / who they follow. The profiles the ids resolve to
+    /// are filtered by the profiles SELECT policy, so private strangers simply
+    /// don't come back — counts can legitimately exceed the visible list.
+    func followerIds(userId: UUID) async throws -> [UUID] {
+        let rows: [Follow] = try await client.from("follows").select()
+            .eq("followee_id", value: userId).execute().value
+        return rows.map(\.followerId)
+    }
+
+    func followingIds(userId: UUID) async throws -> [UUID] {
+        let rows: [Follow] = try await client.from("follows").select()
+            .eq("follower_id", value: userId).execute().value
+        return rows.map(\.followeeId)
     }
 
     func followCounts(userId: UUID) async throws -> (followers: Int, following: Int) {

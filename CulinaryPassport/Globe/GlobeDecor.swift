@@ -20,7 +20,9 @@ enum GlobeDecor {
     /// Sepia ink for borders — reads as "drawn on paper", per the light/clean
     /// design language. Opaque enough to separate two filled-in neighbours.
     static let borderInk = UIColor(red: 0.34, green: 0.29, blue: 0.21, alpha: 0.92)
-    static let selectedInk = UIColor(red: 0.16, green: 0.13, blue: 0.09, alpha: 1)
+    /// Selection reads as "a heavier version of the same ink" — a near-black
+    /// rope around the country was too harsh.
+    static let selectedInk = UIColor(red: 0.28, green: 0.23, blue: 0.16, alpha: 0.95)
 
     private static let borderRadius = 1.0055
     private static let outlineRadius = 1.0075
@@ -28,7 +30,7 @@ enum GlobeDecor {
     /// Ribbon half-width in degrees. ~0.6pt at the default camera distance
     /// (≈2px on a 3× screen) and thicker as you zoom in, like a real map.
     private static let borderHalfWidth = 0.10
-    private static let outlineHalfWidth = 0.17
+    private static let outlineHalfWidth = 0.125
 
     /// Straight-line political borders (the US–Canada 49th parallel, the
     /// Sahara's ruler-drawn edges) carry only a handful of vertices, and a
