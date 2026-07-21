@@ -38,8 +38,9 @@ MVP → v1.3 is built (see `docs/ROADMAP.md` for per-item status):
 - **Groups**: create / invite-code join, live feed (realtime subscription +
   pull-to-refresh) with reactions and comments, synced meals, group globe
 - **Retention**: dinner picker, avatar accessories, Yearly Wrapped
-- **Avatar**: PhotosPicker selfie → Vision face-crop → `generate-avatar` edge
-  function → composited accessories (server enforces the 3/day limit)
+- **Avatar**: a photo you pick, uploaded to the `avatars` bucket (own-folder
+  RLS), with unlockable accessories composited over it. The AI selfie→portrait
+  pipeline was dropped — see `docs/ROADMAP.md` item 4
 
 Still open: **push notifications** (ROADMAP item 14) — token registration works,
 but APNs delivery, notification handling, and the push entitlement are gated on

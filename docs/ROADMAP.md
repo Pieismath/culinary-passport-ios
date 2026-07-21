@@ -5,11 +5,16 @@ schema lives in the web repo (`supabase/migrations/` — see its `supabase/READM
 
 Status legend: ✅ shipped · 🔶 partial · ⛔ blocked
 
-## Gate 0 — avatar de-risk ✅ (passed; pipeline is live in production)
+## Gate 0 — avatar de-risk (historical; superseded 2026-07-21)
 
-Historical gate: `scripts/avatar-style-test.mjs` judged Gemini 2.5 Flash Image
-("Nano Banana") output before the build was greenlit. The provider abstraction
-remains — switching costs one env var (`AVATAR_PROVIDER`).
+`scripts/avatar-style-test.mjs` judged Gemini 2.5 Flash Image ("Nano Banana")
+output before the build was greenlit, and the pipeline shipped. It was
+**retired** in favour of user-chosen photos: a per-user generation cost and a
+stylized face aren't the right fit for a food journal. The `generate-avatar`
+edge function is still deployed but no longer called by the app — delete it
+(and the `GEMINI_API_KEY` secret) if it isn't coming back. Bitmoji-style 3D
+avatars would need a third-party avatar service (e.g. Ready Player Me), not
+this pipeline.
 
 ## MVP (App Store submission target)
 
@@ -18,7 +23,8 @@ remains — switching costs one env var (`AVATAR_PROVIDER`).
 2. ✅ 3D globe — SceneKit + Natural Earth polygons, tessellated + mesh-cached
 3. ✅ Personal entries: add / edit / delete with photos + rating (photos in a
    private bucket, rendered via signed URLs)
-4. ✅ Avatar pipeline: selfie → Vision face-crop → Nano Banana → server-cached PNG
+4. ✅ Avatar: user-chosen photo → `avatars/{user_id}/…` (own-folder RLS) →
+   `profiles.avatar_url`, accessories composited client-side
 5. ✅ Solo profile view
 6. ✅ Country coloring for personal use
 

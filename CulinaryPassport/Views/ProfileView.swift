@@ -1,8 +1,10 @@
 import SwiftUI
 import PhotosUI
 
-/// MVP step 4-5: solo profile + the avatar pipeline entry point.
-/// Selfie → Vision face-crop → generate-avatar edge function → cached PNG.
+/// Your profile: photo, identity, the numbers, and the ways in.
+/// The avatar is a photo YOU choose — the AI-generated portrait pipeline was
+/// dropped (it cost an API key per user and a stylized face isn't what this
+/// app is about); unlockable accessories still composite over the photo.
 struct ProfileView: View {
     @State private var avatarURL: URL?
     @State private var pickedItem: PhotosPickerItem?
@@ -11,21 +13,31 @@ struct ProfileView: View {
     @State private var equipped = EquippedStore.load()
     @State private var profile: Profile?
     @State private var showEdit = false
+    @State private var stats = Stats()
+    @State private var follows: (followers: Int, following: Int) = (0, 0)
 
-    @State private var stats: (countries: Int, meals: Int, continents: Int)?
+    struct Stats {
+        var meals = 0
+        var countries = 0
+        var continents = 0
+        var rare = 0
+        var streakWeeks = 0
+        var thisYear = 0
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 18) {
-                    heroCard
-                    statsRow
+                VStack(spacing: 14) {
+                    header
+                    countRows
+                    cards
                     actionRows
 
                     if let status {
                         Text(status)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color(.secondaryLabel))
                             .multilineTextAlignment(.center)
                     }
 
@@ -33,37 +45,36 @@ struct ProfileView: View {
                         Task { try? await SupabaseService.shared.client.auth.signOut() }
                     }
                     .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 8)
+                    .foregroundStyle(Color(.secondaryLabel))
+                    .padding(.top, 4)
                 }
-                .padding()
+                .padding(.horizontal)
+                .padding(.bottom, 24)
             }
             .background(Color(red: 0.972, green: 0.960, blue: 0.930).ignoresSafeArea())
             .navigationTitle("Profile")
-            .task { await loadAvatar() }
+            .navigationBarTitleDisplayMode(.inline)
+            .task { await load() }
             .onAppear { equipped = EquippedStore.load() } // reflect customizer changes on return
-            .onChange(of: pickedItem) {
-                Task { await generate() }
-            }
+            .onChange(of: pickedItem) { Task { await uploadPhoto() } }
             .sheet(isPresented: $showEdit) {
                 if let profile {
-                    ProfileEditSheet(profile: profile) { await loadAvatar() }
+                    ProfileEditSheet(profile: profile) { await load() }
                 }
             }
         }
     }
 
-    // ── Hero: avatar on a soft backdrop, camera FAB, identity (bitmoji-style) ─
+    // ── Header: photo, identity, follow counts, actions ──────────────────────
 
-    private var heroCard: some View {
-        VStack(spacing: 14) {
+    private var header: some View {
+        VStack(spacing: 10) {
             ZStack(alignment: .bottomTrailing) {
-                // Composited with equipped accessories (ROADMAP item 17).
-                ComposedAvatarView(url: avatarURL, equipped: equipped, size: 190)
+                ComposedAvatarView(url: avatarURL, equipped: equipped, size: 104)
                     .id(equipped)
-                    .background(Circle().fill(.white).padding(-8))
-                    .overlay(Circle().stroke(.white, lineWidth: 5).padding(-8))
-                    .shadow(color: .black.opacity(0.14), radius: 14, y: 6)
+                    .background(Circle().fill(.white).padding(-4))
+                    .overlay(Circle().stroke(.white, lineWidth: 3).padding(-4))
+                    .shadow(color: .black.opacity(0.10), radius: 8, y: 3)
                     .overlay {
                         if busy {
                             ZStack {
@@ -73,72 +84,105 @@ struct ProfileView: View {
                         }
                     }
 
-                // "new selfie → new avatar" lives on the avatar itself.
                 PhotosPicker(selection: $pickedItem, matching: .images) {
                     Image(systemName: "camera.fill")
-                        .font(.callout.weight(.semibold))
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 32, height: 32)
                         .background(Circle().fill(Color.accentColor))
-                        .overlay(Circle().stroke(.white, lineWidth: 3))
-                        .shadow(color: .black.opacity(0.2), radius: 5, y: 2)
+                        .overlay(Circle().stroke(.white, lineWidth: 2.5))
                 }
                 .disabled(busy)
-                .offset(x: 6, y: 6)
-                .accessibilityLabel("New selfie, new avatar")
+                .accessibilityLabel("Change profile photo")
             }
-            .padding(.top, 26)
+            .padding(.top, 6)
 
-            VStack(spacing: 3) {
-                Text(profile?.name ?? " ").font(.title2.bold())
+            VStack(spacing: 2) {
+                Text(profile?.name ?? " ").font(.title3.bold())
                 if let username = profile?.username, !username.isEmpty {
-                    Text("@\(username)").font(.subheadline).foregroundStyle(.secondary)
+                    Text("@\(username)").font(.subheadline).foregroundStyle(Color(.secondaryLabel))
                 }
-                if let profile {
-                    Label(profile.isPublic == true ? "Public profile" : "Private profile",
-                          systemImage: profile.isPublic == true ? "globe" : "lock")
+                if let since = profile?.createdAt {
+                    Text("Member since \(since.formatted(.dateTime.month(.wide).year()))")
                         .font(.caption)
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(.white.opacity(0.7), in: Capsule())
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 3)
+                        .foregroundStyle(Color(.tertiaryLabel))
                 }
             }
-            .padding(.bottom, 20)
-        }
-        .frame(maxWidth: .infinity)
-        .background {
-            // warm paper → soft lavender wash, with faint stamp rings
-            ZStack {
-                LinearGradient(
-                    colors: [Color(red: 0.99, green: 0.98, blue: 0.96),
-                             Color(red: 0.90, green: 0.87, blue: 0.95)],
-                    startPoint: .top, endPoint: .bottom
-                )
-                Circle().stroke(.white.opacity(0.5), lineWidth: 1.5)
-                    .frame(width: 300, height: 300).offset(x: -130, y: -70)
-                Circle().stroke(.white.opacity(0.4), lineWidth: 1.5)
-                    .frame(width: 210, height: 210).offset(x: 150, y: 90)
+
+            HStack(spacing: 0) {
+                CountColumn(value: follows.followers, label: "Followers")
+                CountColumn(value: follows.following, label: "Following")
+                CountColumn(value: stats.countries, label: "Cuisines")
             }
+            .padding(.top, 2)
+
+            HStack(spacing: 8) {
+                Button { showEdit = true } label: {
+                    Text("Edit profile")
+                        .font(.subheadline.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                ShareLink(item: shareText) {
+                    Text("Share profile")
+                        .font(.subheadline.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .padding(.top, 2)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 26))
-        .shadow(color: .black.opacity(0.06), radius: 10, y: 4)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity)
+        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 20))
+        .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
     }
 
-    // ── Stats ────────────────────────────────────────────────────────────────
+    private var shareText: String {
+        let handle = profile?.username.map { "@\($0)" } ?? profile?.name ?? "me"
+        return "\(handle) has eaten \(stats.countries) of the world's cuisines on Culinary Passport."
+    }
 
-    private var statsRow: some View {
+    // ── Counts (the Been / Want to try shape) ────────────────────────────────
+
+    private var countRows: some View {
+        VStack(spacing: 0) {
+            CountRow(icon: "checkmark.circle", tint: .green, title: "Meals logged", value: stats.meals)
+            Divider().padding(.leading, 50)
+            CountRow(icon: "globe.europe.africa", tint: .blue, title: "Continents", value: stats.continents)
+            Divider().padding(.leading, 50)
+            CountRow(icon: "sparkles", tint: .orange, title: "Rare finds", value: stats.rare)
+        }
+        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
+        .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
+    }
+
+    // ── Cards ────────────────────────────────────────────────────────────────
+
+    private var cards: some View {
         HStack(spacing: 10) {
-            StatTile(value: stats.map { "\($0.countries)" } ?? "–", label: "cuisines")
-            StatTile(value: stats.map { "\($0.meals)" } ?? "–", label: "meals")
-            StatTile(value: stats.map { "\($0.continents)" } ?? "–", label: "continents")
+            StatCard(icon: "flame.fill", tint: .orange,
+                     value: "\(stats.streakWeeks)", caption: stats.streakWeeks == 1 ? "week streak" : "weeks streak")
+            StatCard(icon: "calendar", tint: .purple,
+                     value: "\(stats.thisYear)", caption: "meals this year")
         }
     }
-
-    // ── Actions ──────────────────────────────────────────────────────────────
 
     private var actionRows: some View {
         VStack(spacing: 0) {
+            NavigationLink {
+                WrappedView()
+            } label: {
+                ActionRow(icon: "sparkles", tint: .pink, title: "Year in review")
+            }
+            .buttonStyle(.plain)
+
+            Divider().padding(.leading, 56)
+
             NavigationLink {
                 AvatarCustomizeView(avatarURL: avatarURL)
             } label: {
@@ -147,28 +191,14 @@ struct ProfileView: View {
             .buttonStyle(.plain)
             .disabled(avatarURL == nil)
             .opacity(avatarURL == nil ? 0.45 : 1)
-
-            Divider().padding(.leading, 56)
-
-            Button { showEdit = true } label: {
-                ActionRow(icon: "pencil", tint: .blue, title: "Edit profile")
-            }
-            .buttonStyle(.plain)
-
-            Divider().padding(.leading, 56)
-
-            NavigationLink {
-                WrappedView()
-            } label: {
-                ActionRow(icon: "sparkles", tint: .orange, title: "Year in review")
-            }
-            .buttonStyle(.plain)
         }
-        .background(.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 18))
+        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
         .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
     }
 
-    private func loadAvatar() async {
+    // ── Data ─────────────────────────────────────────────────────────────────
+
+    private func load() async {
         do {
             guard let me = try await SupabaseService.shared.myProfile() else {
                 // Profile row is gone (deleted user / stale session) — sign out.
@@ -177,47 +207,120 @@ struct ProfileView: View {
             }
             profile = me
             if let urlString = me.avatarUrl { avatarURL = URL(string: urlString) }
-            let entries = (try? await SupabaseService.shared.myEntries()) ?? []
-            let codes = Set(entries.map(\.countryCode))
-            let continents = Set(codes.compactMap { CountryStore.byCode[$0]?.continent })
-            stats = (codes.count, entries.count, continents.count)
+            follows = (try? await SupabaseService.shared.followCounts(userId: me.id)) ?? (0, 0)
+
+            // RLS also returns group-shared entries; the profile counts should
+            // only reflect MY meals.
+            let mine = ((try? await SupabaseService.shared.myEntries()) ?? [])
+                .filter { $0.userId == me.id }
+            stats = Self.summarize(mine)
         } catch {
             // Transient load failure — leave the screen as-is (don't sign out).
         }
     }
 
-    private func generate() async {
+    static func summarize(_ entries: [Entry]) -> Stats {
+        var s = Stats()
+        s.meals = entries.count
+        let codes = Set(entries.map(\.countryCode))
+        s.countries = codes.count
+        s.continents = Set(codes.compactMap { CountryStore.byCode[$0]?.continent }).count
+        s.rare = codes.filter { Country.rareCodes.contains($0) }.count
+
+        let calendar = Calendar.current
+        let year = calendar.component(.year, from: Date())
+        let parser = DateFormatter()
+        parser.dateFormat = "yyyy-MM-dd"
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        let dates = entries.compactMap { parser.date(from: $0.dateTried) }
+        s.thisYear = dates.filter { calendar.component(.year, from: $0) == year }.count
+
+        // Consecutive weeks with at least one meal, counting back from this
+        // week (a not-yet-eaten current week doesn't break the streak).
+        let weeks = Set(dates.compactMap {
+            calendar.dateInterval(of: .weekOfYear, for: $0)?.start
+        })
+        guard var cursor = calendar.dateInterval(of: .weekOfYear, for: Date())?.start else { return s }
+        if !weeks.contains(cursor) {
+            cursor = calendar.date(byAdding: .weekOfYear, value: -1, to: cursor) ?? cursor
+        }
+        while weeks.contains(cursor) {
+            s.streakWeeks += 1
+            guard let previous = calendar.date(byAdding: .weekOfYear, value: -1, to: cursor) else { break }
+            cursor = previous
+        }
+        return s
+    }
+
+    private func uploadPhoto() async {
         guard let pickedItem else { return }
         busy = true
         defer { busy = false; self.pickedItem = nil }
         do {
             guard let data = try await pickedItem.loadTransferable(type: Data.self),
-                  let image = UIImage(data: data) else {
+                  let image = UIImage(data: data),
+                  let jpeg = ImageTools.squareJPEG(image, side: 512) else {
                 status = "Couldn't read that photo"
                 return
             }
-            status = "Generating your avatar — takes ~20s…"
-            let result = try await AvatarService.generateAvatar(from: image)
-            avatarURL = URL(string: "\(result.url)?v=\(Int(Date().timeIntervalSince1970))")
-            status = "Done (\(result.provider))"
+            let url = try await SupabaseService.shared.uploadAvatar(jpeg)
+            avatarURL = URL(string: url)
+            status = nil
         } catch {
-            status = error.localizedDescription // includes the 3/day limit message from the server
+            status = error.localizedDescription
         }
     }
 }
 
-private struct StatTile: View {
-    let value: String
+private struct CountColumn: View {
+    let value: Int
     let label: String
 
     var body: some View {
-        VStack(spacing: 2) {
-            Text(value).font(.title3.bold()).monospacedDigit()
-            Text(label).font(.caption).foregroundStyle(.secondary)
+        VStack(spacing: 1) {
+            Text("\(value)").font(.headline).monospacedDigit()
+            Text(label).font(.caption).foregroundStyle(Color(.secondaryLabel))
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+private struct CountRow: View {
+    let icon: String
+    let tint: Color
+    let title: String
+    let value: Int
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(tint)
+                .frame(width: 26)
+            Text(title)
+            Spacer()
+            Text("\(value)").font(.headline).monospacedDigit()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+    }
+}
+
+private struct StatCard: View {
+    let icon: String
+    let tint: Color
+    let value: String
+    let caption: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Image(systemName: icon).font(.subheadline).foregroundStyle(tint)
+            Text(value).font(.title3.bold()).monospacedDigit()
+            Text(caption).font(.caption).foregroundStyle(Color(.secondaryLabel))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
     }
 }
@@ -232,16 +335,16 @@ private struct ActionRow: View {
             Image(systemName: icon)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.white)
-                .frame(width: 32, height: 32)
-                .background(RoundedRectangle(cornerRadius: 9).fill(tint.gradient))
+                .frame(width: 30, height: 30)
+                .background(RoundedRectangle(cornerRadius: 8).fill(tint.gradient))
             Text(title).foregroundStyle(.primary)
             Spacer()
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Color(.tertiaryLabel))
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, 11)
         .contentShape(Rectangle())
     }
 }

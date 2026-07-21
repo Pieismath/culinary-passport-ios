@@ -12,6 +12,8 @@ struct Profile: Codable, Identifiable, Hashable {
     var bio: String?
     var avatarUrl: String?
     var isPublic: Bool?
+    /// Signup date — "Member since March 2026" on the profile header.
+    var createdAt: Date?
 }
 
 struct Entry: Codable, Identifiable, Hashable {

@@ -75,6 +75,26 @@ enum AvatarComposer {
     }
 }
 
+/// Shared image prep for the photos users upload as identity (profile photo,
+/// group photo): center-crop to a square and downscale before upload.
+enum ImageTools {
+    static func squareJPEG(_ image: UIImage, side: CGFloat, quality: CGFloat = 0.8) -> Data? {
+        let source = min(image.size.width, image.size.height)
+        guard source > 0 else { return nil }
+        let scale = side / source
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
+        let cropped = renderer.image { _ in
+            image.draw(in: CGRect(
+                x: (side - size.width) / 2,
+                y: (side - size.height) / 2,
+                width: size.width, height: size.height
+            ))
+        }
+        return cropped.jpegData(compressionQuality: quality)
+    }
+}
+
 /// Loads the base avatar once and renders it composited with the currently
 /// equipped accessories. Reused by the profile header and the customizer preview.
 struct ComposedAvatarView: View {

@@ -182,7 +182,7 @@ struct GroupDetailsView: View {
         do {
             guard let data = try await pickedItem.loadTransferable(type: Data.self),
                   let image = UIImage(data: data),
-                  let jpeg = Self.squareJPEG(image, side: 512) else {
+                  let jpeg = ImageTools.squareJPEG(image, side: 512) else {
                 status = "Couldn't read that photo"
                 return
             }
@@ -192,22 +192,6 @@ struct GroupDetailsView: View {
             status = "Photo updated"
             await onChanged()
         } catch { status = error.localizedDescription }
-    }
-
-    /// Center-crop to square and downscale — group avatars are small.
-    private static func squareJPEG(_ image: UIImage, side: CGFloat) -> Data? {
-        let source = min(image.size.width, image.size.height)
-        let scale = side / source
-        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
-        let cropped = renderer.image { _ in
-            image.draw(in: CGRect(
-                x: (side - size.width) / 2,
-                y: (side - size.height) / 2,
-                width: size.width, height: size.height
-            ))
-        }
-        return cropped.jpegData(compressionQuality: 0.8)
     }
 
     private func leave() async {

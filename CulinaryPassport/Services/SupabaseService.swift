@@ -280,6 +280,28 @@ final class SupabaseService {
             .execute()
     }
 
+    // ── Profile photo ────────────────────────────────────────────────────────
+
+    /// Upload a profile photo and point the profile at it. Users own the
+    /// `avatars/{user_id}/…` folder (see the user_avatar_uploads migration);
+    /// the path is unique per upload so caches can't serve a stale face.
+    /// Returns the public URL now stored on the profile.
+    func uploadAvatar(_ jpeg: Data) async throws -> String {
+        let session = try await client.auth.session
+        let path = "\(session.user.id.uuidString)/\(UUID().uuidString).jpg"
+        try await client.storage.from("avatars").upload(
+            path, data: jpeg,
+            options: FileOptions(cacheControl: "3600", contentType: "image/jpeg", upsert: false)
+        )
+        let url = try client.storage.from("avatars").getPublicURL(path: path).absoluteString
+        struct AvatarPatch: Encodable { let avatarUrl: String }
+        try await client.from("profiles")
+            .update(AvatarPatch(avatarUrl: url))
+            .eq("id", value: session.user.id)
+            .execute()
+        return url
+    }
+
     func followCounts(userId: UUID) async throws -> (followers: Int, following: Int) {
         async let followers: [Follow] = client.from("follows").select()
             .eq("followee_id", value: userId).execute().value
