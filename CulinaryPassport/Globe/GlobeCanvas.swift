@@ -265,33 +265,31 @@ struct GlobeCanvas: UIViewRepresentable {
         }
 
         /// Where on the globe (lat/lng) a screen point touches, or nil
-        /// off-globe. Touches resolve GEOGRAPHICALLY — any hit (ocean, cap,
-        /// border line) gives a sphere direction; never trust hit-node names
-        /// (cap triangles are back-face-culled out of hit results and the
-        /// borders node shadows everything else).
+        /// off-globe. The screen ray is intersected analytically with the globe
+        /// surface. SceneKit mesh hits are deliberately not involved: raised
+        /// border lines, triangulated cap chords, and back faces can otherwise
+        /// move the resolved location away from the pixel the user touched.
         private func latLng(at point: CGPoint?) -> (lat: Double, lng: Double)? {
             guard let view = scnView, let point, let globe = globeNode else { return nil }
-            let hits = view.hitTest(point, options: [
-                SCNHitTestOption.searchMode: SCNHitTestSearchMode.closest.rawValue,
-                SCNHitTestOption.backFaceCulling: false,
-            ])
-            guard let hit = hits.first else { return nil }
-            let world = simd_float3(hit.worldCoordinates.x, hit.worldCoordinates.y, hit.worldCoordinates.z)
-            let local = globe.presentation.simdConvertPosition(world, from: nil)
-            let radius = simd_length(local)
-            guard radius > 0.5 else { return nil }
-            let lat = asin(max(-1, min(1, Double(local.y) / Double(radius)))) * 180 / .pi
-            let lng = atan2(Double(local.x), Double(local.z)) * 180 / .pi
-            return (lat, lng)
+            let nearWorld = view.unprojectPoint(SCNVector3(Float(point.x), Float(point.y), 0))
+            let farWorld = view.unprojectPoint(SCNVector3(Float(point.x), Float(point.y), 1))
+            let nearLocal = globe.presentation.simdConvertPosition(
+                SIMD3<Float>(nearWorld.x, nearWorld.y, nearWorld.z), from: nil
+            )
+            let farLocal = globe.presentation.simdConvertPosition(
+                SIMD3<Float>(farWorld.x, farWorld.y, farWorld.z), from: nil
+            )
+            guard let hit = GlobeMath.frontIntersection(
+                rayOrigin: nearLocal,
+                rayDirection: farLocal - nearLocal,
+                radius: Float(GlobeNodeFactory.capRadius)
+            ) else { return nil }
+            return GlobeMath.latLng(at: hit)
         }
 
         private func countryCode(at point: CGPoint?) -> String? {
             guard let spot = latLng(at: point) else { return nil }
-            // Near-miss tolerance shrinks as you zoom in: a finger covers
-            // ~1.2° at the default distance, a fraction of that when close.
-            let tolerance = Double(1.2 * max(0.2, (cameraZ - 1) / 5.9))
-            return CountryGeometry.country(atLat: spot.lat, lng: spot.lng,
-                                           toleranceDegrees: min(1.2, tolerance))
+            return CountryGeometry.country(atLat: spot.lat, lng: spot.lng)
         }
 
         // ── Selection outline ────────────────────────────────────────────────

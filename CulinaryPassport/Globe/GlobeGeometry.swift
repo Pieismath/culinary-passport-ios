@@ -1,5 +1,6 @@
 import Foundation
 import SceneKit
+import simd
 
 // MVP step 2 — the real globe. Ports the polygon/coloring intent of the web
 // GlobeView.tsx (globe.gl) onto SceneKit: Natural Earth 110m country rings are
@@ -16,13 +17,25 @@ import SceneKit
 typealias Ring = [SIMD2<Double>]
 
 enum CountryGeometry {
+    private struct CountryPolygon {
+        let outer: Ring
+        let holes: [Ring]
+    }
+
+    /// Full polygon topology used for hit resolution. Keeping interior rings
+    /// matters for enclaves: Natural Earth represents Lesotho as a hole in
+    /// South Africa, so dropping holes gives both countries the same tap area.
+    private static let polygons: [String: [CountryPolygon]] = load()
+
     /// ISO_A2 → its outer rings (a country may be several polygons, e.g. islands).
-    static let rings: [String: [Ring]] = load()
+    /// Rendering consumes these same boundaries; hit resolution additionally
+    /// consults the interior rings retained in `polygons` above.
+    static let rings: [String: [Ring]] = polygons.mapValues { $0.map(\.outer) }
 
     // Natural Earth 110m sets ISO_A2 = -99 for these; match CountryStore.isoFix.
     private static let isoFix = ["France": "FR", "Norway": "NO", "Kosovo": "XK"]
 
-    private static func load() -> [String: [Ring]] {
+    private static func load() -> [String: [CountryPolygon]] {
         guard let url = Bundle.main.url(forResource: "countries", withExtension: "geojson"),
               let data = try? Data(contentsOf: url),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -32,7 +45,7 @@ enum CountryGeometry {
             return [:]
         }
 
-        var result: [String: [Ring]] = [:]
+        var result: [String: [CountryPolygon]] = [:]
         for feature in features {
             guard let props = feature["properties"] as? [String: Any] else { continue }
             var code = props["ISO_A2"] as? String ?? ""
@@ -41,9 +54,9 @@ enum CountryGeometry {
             }
             guard code.count == 2, code.allSatisfy({ $0.isUppercase }), code != "AQ" else { continue }
 
-            let outerRings = outerRings(of: feature["geometry"] as? [String: Any])
-            guard !outerRings.isEmpty else { continue }
-            result[code, default: []].append(contentsOf: outerRings)
+            let countryPolygons = countryPolygons(of: feature["geometry"] as? [String: Any])
+            guard !countryPolygons.isEmpty else { continue }
+            result[code, default: []].append(contentsOf: countryPolygons)
         }
         return result
     }
@@ -54,55 +67,41 @@ enum CountryGeometry {
     // resolve geographically instead: sphere hit point → lat/lng → which
     // country ring contains it.
 
-    private struct IndexedRing {
+    private struct IndexedPolygon {
         let code: String
         let minLng: Double, maxLng: Double, minLat: Double, maxLat: Double
-        let ring: Ring
+        let outer: Ring
+        let holes: [Ring]
     }
 
-    private static let ringIndex: [IndexedRing] = rings.flatMap { code, rings in
-        rings.compactMap { ring -> IndexedRing? in
-            guard ring.count > 3 else { return nil }
+    private static let polygonIndex: [IndexedPolygon] = polygons.flatMap { code, polygons in
+        polygons.compactMap { polygon -> IndexedPolygon? in
+            guard polygon.outer.count > 3 else { return nil }
             var minLng = Double.greatestFiniteMagnitude, maxLng = -Double.greatestFiniteMagnitude
             var minLat = Double.greatestFiniteMagnitude, maxLat = -Double.greatestFiniteMagnitude
-            for p in ring {
+            for p in polygon.outer {
                 minLng = min(minLng, p.x); maxLng = max(maxLng, p.x)
                 minLat = min(minLat, p.y); maxLat = max(maxLat, p.y)
             }
-            return IndexedRing(code: code, minLng: minLng, maxLng: maxLng,
-                               minLat: minLat, maxLat: maxLat, ring: ring)
+            return IndexedPolygon(code: code, minLng: minLng, maxLng: maxLng,
+                                  minLat: minLat, maxLat: maxLat,
+                                  outer: polygon.outer, holes: polygon.holes)
         }
     }
 
-    /// The country whose outer ring contains (lat, lng), or nil for open ocean.
+    /// The country whose polygon contains (lat, lng), or nil for open ocean.
+    /// There is intentionally no fuzzy fallback: selectable regions must end at
+    /// the same geographic boundaries that are drawn on the globe.
     static func country(atLat lat: Double, lng: Double) -> String? {
-        for entry in ringIndex
+        for entry in polygonIndex
         where lng >= entry.minLng && lng <= entry.maxLng
             && lat >= entry.minLat && lat <= entry.maxLat {
-            if contains(entry.ring, lng: lng, lat: lat) { return entry.code }
-        }
-        return nil
-    }
-
-    /// Like `country(atLat:lng:)`, but a near-miss (coastal water next to an
-    /// island, a hair outside a border) snaps to the closest country ring
-    /// within `toleranceDegrees` — finger-sized taps aren't laser pointers.
-    static func country(atLat lat: Double, lng: Double, toleranceDegrees tol: Double) -> String? {
-        if let exact = country(atLat: lat, lng: lng) { return exact }
-        guard tol > 0 else { return nil }
-        let cosLat = max(0.05, cos(lat * .pi / 180))
-        var best: (code: String, d2: Double)?
-        for entry in ringIndex
-        where lng >= entry.minLng - tol && lng <= entry.maxLng + tol
-            && lat >= entry.minLat - tol && lat <= entry.maxLat + tol {
-            for p in entry.ring {
-                let dx = (p.x - lng) * cosLat
-                let dy = p.y - lat
-                let d2 = dx * dx + dy * dy
-                if d2 < (best?.d2 ?? tol * tol) { best = (entry.code, d2) }
+            guard contains(entry.outer, lng: lng, lat: lat) else { continue }
+            if !entry.holes.contains(where: { contains($0, lng: lng, lat: lat) }) {
+                return entry.code
             }
         }
-        return best?.code
+        return nil
     }
 
     /// Rough footprint of a country's largest ring in lat-corrected deg² —
@@ -113,7 +112,7 @@ enum CountryGeometry {
 
     private static let sizeHints: [String: Double] = {
         var result: [String: Double] = [:]
-        for entry in ringIndex {
+        for entry in polygonIndex {
             let mid = (entry.minLat + entry.maxLat) / 2
             let area = (entry.maxLng - entry.minLng) * (entry.maxLat - entry.minLat) * cos(mid * .pi / 180)
             result[entry.code] = max(result[entry.code] ?? 0, area)
@@ -123,7 +122,7 @@ enum CountryGeometry {
 
     /// Standard even-odd ray cast in lng/lat space (Natural Earth polygons are
     /// split at the dateline, so no wrap handling is needed).
-    private static func contains(_ ring: Ring, lng: Double, lat: Double) -> Bool {
+    static func contains(_ ring: Ring, lng: Double, lat: Double) -> Bool {
         var inside = false
         var j = ring.count - 1
         for i in 0..<ring.count {
@@ -137,8 +136,8 @@ enum CountryGeometry {
         return inside
     }
 
-    /// Outer ring (index 0) of each polygon; holes are dropped — invisible at this scale.
-    private static func outerRings(of geometry: [String: Any]?) -> [Ring] {
+    /// Every polygon with its outer boundary and any interior holes.
+    private static func countryPolygons(of geometry: [String: Any]?) -> [CountryPolygon] {
         guard let geometry else { return [] }
         let polys: [[[[Double]]]]
         if geometry["type"] as? String == "Polygon", let c = geometry["coordinates"] as? [[[Double]]] {
@@ -149,8 +148,17 @@ enum CountryGeometry {
             return []
         }
         return polys.compactMap { poly in
-            guard let ring = poly.first, ring.count > 3 else { return nil }
-            return ring.map { SIMD2<Double>($0[0], $0[1]) }
+            guard let outer = poly.first, outer.count > 3 else { return nil }
+            let outerRing = EarClip.cleaned(outer.map { SIMD2<Double>($0[0], $0[1]) })
+            guard outerRing.count >= 3 else { return nil }
+            return CountryPolygon(
+                outer: outerRing,
+                holes: poly.dropFirst().compactMap { ring in
+                    guard ring.count > 3 else { return nil }
+                    let cleaned = EarClip.cleaned(ring.map { SIMD2<Double>($0[0], $0[1]) })
+                    return cleaned.count >= 3 ? cleaned : nil
+                }
+            )
         }
     }
 }
@@ -169,6 +177,41 @@ enum GlobeMath {
             Float(radius * cos(phi) * cos(lambda))
         )
     }
+
+    /// Nearest forward intersection between a ray and a sphere centred at the
+    /// origin. Globe taps use this instead of SceneKit geometry hit-testing so
+    /// raised borders, tessellated caps, and back faces cannot shift the point.
+    static func frontIntersection(rayOrigin origin: SIMD3<Float>,
+                                  rayDirection direction: SIMD3<Float>,
+                                  radius: Float) -> SIMD3<Float>? {
+        let a = simd_dot(direction, direction)
+        guard a > Float.ulpOfOne else { return nil }
+        let b = 2 * simd_dot(origin, direction)
+        let c = simd_dot(origin, origin) - radius * radius
+        let discriminant = b * b - 4 * a * c
+        guard discriminant >= 0 else { return nil }
+
+        let root = sqrt(discriminant)
+        let near = (-b - root) / (2 * a)
+        let far = (-b + root) / (2 * a)
+        let distance: Float
+        if near >= 0 {
+            distance = near
+        } else if far >= 0 {
+            distance = far
+        } else {
+            return nil
+        }
+        return origin + direction * distance
+    }
+
+    static func latLng(at point: SIMD3<Float>) -> (lat: Double, lng: Double)? {
+        let radius = simd_length(point)
+        guard radius > 0 else { return nil }
+        let lat = asin(max(-1, min(1, Double(point.y / radius)))) * 180 / .pi
+        let lng = atan2(Double(point.x), Double(point.z)) * 180 / .pi
+        return (lat, lng)
+    }
 }
 
 // MARK: - Ear-clipping triangulation (2D, lng/lat space)
@@ -177,9 +220,7 @@ enum EarClip {
     /// Returns triangle index triples into `ring`. Assumes a simple (non-self-
     /// intersecting) polygon; the last vertex may repeat the first (geojson does).
     static func triangulate(_ ring: Ring) -> [Int] {
-        var pts = ring
-        // geojson closes rings by repeating the first point — drop the duplicate.
-        if pts.count > 1, pts.first == pts.last { pts.removeLast() }
+        let pts = cleaned(ring)
         let n = pts.count
         guard n >= 3 else { return [] }
 
@@ -217,32 +258,61 @@ enum EarClip {
                 earFound = true
                 break
             }
-            // Natural Earth rings occasionally have collinear runs or slight self-
-            // intersections where no clean ear exists. Rather than bail (which
-            // leaves a country half-filled), force progress by clipping the most
-            // convex corner. Costs a tiny sliver, never a hole.
+            // Never manufacture a triangle when no valid ear exists. The old
+            // fallback crossed outside malformed rings (most visibly Alaska over
+            // Canada). Cleaning duplicate vertices handles the Natural Earth
+            // degeneracies we ship; returning no mesh is safer than drawing land
+            // outside a country's border if future data is actually invalid.
             if !earFound {
-                var bestIdx = 0
-                var bestConvexity = -Double.greatestFiniteMagnitude
-                let count = indices.count
-                for i in 0..<count {
-                    let a = pts[indices[(i + count - 1) % count]]
-                    let b = pts[indices[i]]
-                    let c = pts[indices[(i + 1) % count]]
-                    let convexity = cross(a, b, c)
-                    if convexity > bestConvexity { bestConvexity = convexity; bestIdx = i }
-                }
-                let prev = indices[(bestIdx + count - 1) % count]
-                let curr = indices[bestIdx]
-                let next = indices[(bestIdx + 1) % count]
-                triangles.append(contentsOf: [prev, curr, next])
-                indices.remove(at: bestIdx)
+                return []
             }
         }
         if indices.count == 3 {
             triangles.append(contentsOf: indices)
         }
         return triangles
+    }
+
+    /// Natural Earth occasionally repeats a closing coordinate more than once
+    /// or includes two practically identical consecutive points. Both create a
+    /// zero-area ear and used to activate the unsafe fallback above.
+    static func cleaned(_ ring: Ring) -> Ring {
+        let duplicateThresholdSquared = 1e-8 // 0.0001°, roughly 11 m at the equator
+        func nearlyEqual(_ a: SIMD2<Double>, _ b: SIMD2<Double>) -> Bool {
+            let delta = a - b
+            return delta.x * delta.x + delta.y * delta.y <= duplicateThresholdSquared
+        }
+
+        var points: Ring = []
+        for point in ring {
+            if let last = points.last, nearlyEqual(last, point) { continue }
+            points.append(point)
+        }
+        while points.count > 1,
+              let first = points.first,
+              let last = points.last,
+              nearlyEqual(first, last) {
+            points.removeLast()
+        }
+
+        // Remove exact/near-exact collinear runs. Besides wasting triangles,
+        // these can leave a numerically positive but visually zero-area corner
+        // that blocks a later valid ear (Canada's far-north rings contain one).
+        var removedPoint = true
+        while removedPoint, points.count >= 3 {
+            removedPoint = false
+            for index in points.indices {
+                let previous = points[(index + points.count - 1) % points.count]
+                let current = points[index]
+                let next = points[(index + 1) % points.count]
+                if abs(cross(previous, current, next)) <= 1e-10 {
+                    points.remove(at: index)
+                    removedPoint = true
+                    break
+                }
+            }
+        }
+        return points
     }
 
     private static func signedArea(_ p: Ring) -> Double {
@@ -277,13 +347,11 @@ enum GlobeNodeFactory {
     static let capRadius: Double = 1.004
 
     /// A flat ear-clipped triangle chord dips below the sphere at its center; a
-    /// large one sinks past the ocean and the ocean poked through as a hole. So
-    /// we recursively split any triangle whose edge chord exceeds this (~4.6°),
-    /// projecting midpoints back onto the sphere so the fill hugs the surface.
+    /// large one sinks past the ocean and the ocean pokes through as a hole. We
+    /// recursively split every long edge (~4.6°) in lng/lat space, then project
+    /// the small pieces. Interpolating on the sphere instead makes long triangle
+    /// edges follow great-circle arcs that can curve outside the drawn border.
     private static let maxChord: Float = 0.08
-    /// Ear clipping on the occasional self-intersecting Natural Earth ring emits a
-    /// giant spanning triangle (grey sliver across the globe). Drop those.
-    private static let dropChord: Float = 1.2
     private static let maxDepth = 6
 
     /// The tessellated mesh for a country (immutable, colorless). Reused across
@@ -333,15 +401,12 @@ enum GlobeNodeFactory {
         var indices: [Int32] = []
 
         for ring in rings {
-            let tris = EarClip.triangulate(ring)
+            let loop = EarClip.cleaned(ring)
+            let tris = EarClip.triangulate(loop)
             guard tris.count >= 3 else { continue }
-            var loop = ring
-            if loop.count > 1, loop.first == loop.last { loop.removeLast() }
-            let sphere = loop.map { GlobeMath.vec3(lat: $0.y, lng: $0.x, radius: capRadius) }
 
             for t in stride(from: 0, to: tris.count - 2, by: 3) {
-                let a = sphere[tris[t]], b = sphere[tris[t + 1]], c = sphere[tris[t + 2]]
-                if max(chord(a, b), chord(b, c), chord(c, a)) > dropChord { continue }
+                let a = loop[tris[t]], b = loop[tris[t + 1]], c = loop[tris[t + 2]]
                 let pieces = tessellate(a, b, c, depth: maxDepth)
                 let base = Int32(vertices.count)
                 vertices.append(contentsOf: pieces)
@@ -355,17 +420,25 @@ enum GlobeNodeFactory {
         return (source, element)
     }
 
-    /// Recursively split triangle a-b-c into 4 until every edge is short enough to
-    /// hug the sphere, projecting each midpoint back onto the cap radius.
-    private static func tessellate(_ a: SCNVector3, _ b: SCNVector3, _ c: SCNVector3, depth: Int) -> [SCNVector3] {
-        if depth == 0 || max(chord(a, b), chord(b, c), chord(c, a)) <= maxChord {
-            return [a, b, c]
+    /// Recursively split triangle a-b-c in the same lng/lat plane used by the
+    /// polygon and its borders. Only the final small triangles are projected.
+    private static func tessellate(_ a: SIMD2<Double>, _ b: SIMD2<Double>,
+                                   _ c: SIMD2<Double>, depth: Int) -> [SCNVector3] {
+        let av = spherePoint(a), bv = spherePoint(b), cv = spherePoint(c)
+        if depth == 0 || max(chord(av, bv), chord(bv, cv), chord(cv, av)) <= maxChord {
+            return [av, bv, cv]
         }
-        let ab = onSphere(mid(a, b)), bc = onSphere(mid(b, c)), ca = onSphere(mid(c, a))
+        let ab = (a + b) / 2
+        let bc = (b + c) / 2
+        let ca = (c + a) / 2
         return tessellate(a, ab, ca, depth: depth - 1)
             + tessellate(ab, b, bc, depth: depth - 1)
             + tessellate(ca, bc, c, depth: depth - 1)
             + tessellate(ab, bc, ca, depth: depth - 1)
+    }
+
+    private static func spherePoint(_ point: SIMD2<Double>) -> SCNVector3 {
+        GlobeMath.vec3(lat: point.y, lng: point.x, radius: capRadius)
     }
 
     private static func chord(_ a: SCNVector3, _ b: SCNVector3) -> Float {
@@ -373,15 +446,4 @@ enum GlobeNodeFactory {
         return (dx * dx + dy * dy + dz * dz).squareRoot()
     }
 
-    private static func mid(_ a: SCNVector3, _ b: SCNVector3) -> SCNVector3 {
-        SCNVector3((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2)
-    }
-
-    /// Push a point out to the cap radius (used on interpolated midpoints).
-    private static func onSphere(_ p: SCNVector3) -> SCNVector3 {
-        let len = (p.x * p.x + p.y * p.y + p.z * p.z).squareRoot()
-        guard len > 0 else { return p }
-        let r = Float(capRadius) / len
-        return SCNVector3(p.x * r, p.y * r, p.z * r)
-    }
 }

@@ -21,6 +21,9 @@ targets:
     settings:
       base:
         TARGETED_DEVICE_FAMILY: "1" # phone-first product; iPad runs the scaled iPhone app
+        # The product app icon has not been designed yet. XcodeGen otherwise
+        # assumes an AppIcon set as soon as any asset catalog is present.
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
     dependencies:
       - package: Supabase
         product: Supabase
@@ -42,3 +45,13 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: app.culinarypassport.auth
             CFBundleURLSchemes: [culinarypassport]
+
+  CulinaryPassportTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [CulinaryPassportTests]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: CulinaryPassport
