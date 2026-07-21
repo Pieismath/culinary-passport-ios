@@ -133,6 +133,14 @@ final class SupabaseService {
             .eq("group_id", value: groupId).execute().value
     }
 
+    /// Memberships for several groups at once — the groups list needs member
+    /// counts and faces without a query per row.
+    func groupMembers(groupIds: [UUID]) async throws -> [GroupMember] {
+        guard !groupIds.isEmpty else { return [] }
+        return try await client.from("group_members").select()
+            .in("group_id", values: groupIds).execute().value
+    }
+
     /// Fresh copy of one group (post-edit refresh); nil if we lost access.
     func group(id: UUID) async throws -> Group? {
         let rows: [Group] = try await client.from("groups").select()
