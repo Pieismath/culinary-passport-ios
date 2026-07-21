@@ -14,12 +14,9 @@ struct GroupsView: View {
                 Section {
                     ForEach(groups) { group in
                         NavigationLink(value: group) {
-                            VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 12) {
+                                GroupAvatarView(group: group, size: 44)
                                 Text(group.name).font(.headline)
-                                Text("invite code: \(group.inviteCode)")
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
-                                    .textSelection(.enabled)
                             }
                         }
                     }
@@ -49,7 +46,9 @@ struct GroupsView: View {
                 if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
             }
             .navigationTitle("Groups")
-            .navigationDestination(for: Group.self) { GroupFeedView(group: $0) }
+            // A group opens straight onto its shared globe; chat and details
+            // hang off that screen.
+            .navigationDestination(for: Group.self) { GroupGlobeView(group: $0) }
             .task { await reload() }
             .refreshable { await reload() }
         }

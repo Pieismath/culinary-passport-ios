@@ -1,35 +1,57 @@
 import SwiftUI
 import UIKit
 
-/// v1.2 item 13 — the group globe. The same SceneKit globe, colored by the whole
-/// group's collective status with three lenses:
+/// The group HOME: opening a group lands here — the shared globe first, chat
+/// and details a tap away. Three lenses:
+///  - Solidarity: anywhere anyone has eaten, tinted by WHO (each member gets a
+///    distinct color; shared countries blend them).
+///  - Consensus: only where everyone has eaten.
 ///  - My view: just your own cuisines.
-///  - Solidarity: anywhere *anyone* in the group has eaten (union).
-///  - Consensus: only where *everyone* has eaten (intersection).
 struct GroupGlobeView: View {
     let group: Group
 
     enum Mode: String, CaseIterable {
-        case mine = "My view", solidarity = "Solidarity", consensus = "Consensus"
+        case solidarity = "Solidarity", consensus = "Consensus", mine = "My view"
         var blurb: String {
             switch self {
-            case .mine: "Cuisines you've tried."
-            case .solidarity: "Anywhere any of you has eaten."
+            case .solidarity: "Anywhere any of you has eaten — colored by who."
             case .consensus: "Only where everyone has eaten."
+            case .mine: "Cuisines you've tried."
             }
         }
     }
 
+    @State private var groupInfo: Group
     @StateObject private var vm = GroupGlobeViewModel()
     @State private var mode: Mode = .solidarity
     @State private var selected: String?
     @State private var viewingEntry: Entry?
+    @State private var showDetails = false
+    @Environment(\.dismiss) private var dismiss
+
+    init(group: Group) {
+        self.group = group
+        _groupInfo = State(initialValue: group)
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            GlobeCanvas(color: { code, sel in vm.color(for: code, mode: mode, selected: sel) },
-                        selected: $selected)
-                .ignoresSafeArea(edges: .bottom)
+            Color(red: 0.972, green: 0.960, blue: 0.930).ignoresSafeArea()
+
+            VStack(spacing: 10) {
+                Picker("Lens", selection: $mode) {
+                    ForEach(Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+
+                if mode == .solidarity, vm.memberIds.count > 1 {
+                    memberLegend
+                }
+
+                GlobeCanvas(color: { code, sel in vm.color(for: code, mode: mode, selected: sel) },
+                            selected: $selected)
+            }
 
             if vm.loading { ProgressView().padding(.bottom, 40) }
 
@@ -38,7 +60,7 @@ struct GroupGlobeView: View {
                     country: country,
                     tasters: vm.tasterNames(for: code),
                     entries: vm.entriesByCountry[code] ?? [],
-                    authors: vm.usersById,
+                    authors: vm.paletteProfiles,
                     memberCount: vm.memberIds.count,
                     onClose: { selected = nil },
                     onSelectEntry: { viewingEntry = $0 }
@@ -54,23 +76,93 @@ struct GroupGlobeView: View {
             }
         }
         .sheet(item: $viewingEntry) { entry in
-            EntryDetailView(entry: entry, author: vm.usersById[entry.userId]) {
-                await vm.load(group: group)
+            EntryDetailView(entry: entry, author: vm.paletteProfiles[entry.userId]) {
+                await vm.load(group: groupInfo)
             }
             .presentationDetents([.medium, .large])
         }
+        .sheet(isPresented: $showDetails) {
+            GroupDetailsView(
+                group: $groupInfo,
+                members: vm.memberIds,
+                profiles: vm.paletteProfiles,
+                onLeft: { dismiss() },
+                onChanged: { await vm.load(group: groupInfo) }
+            )
+        }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selected)
-        .navigationTitle("\(group.name) globe")
+        .navigationTitle(groupInfo.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                Picker("Lens", selection: $mode) {
-                    ForEach(Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            ToolbarItemGroup(placement: .primaryAction) {
+                NavigationLink {
+                    GroupFeedView(group: groupInfo)
+                } label: {
+                    BrandedIcon(name: "feature-chat", size: 22)
                 }
-                .pickerStyle(.segmented)
+                Button { showDetails = true } label: {
+                    GroupAvatarView(group: groupInfo, size: 28)
+                }
+                .accessibilityLabel("Group details")
             }
         }
-        .task { await vm.load(group: group) }
+        .task { await vm.load(group: groupInfo) }
+    }
+
+    /// Who's who: one chip per member in their globe color.
+    private var memberLegend: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(vm.memberIds, id: \.self) { id in
+                    if let profile = vm.paletteProfiles[id] {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(Color(uiColor: UIColor(hex: profile.color) ?? .systemGray))
+                                .frame(width: 9, height: 9)
+                            Text(profile.name).font(.caption)
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
+                        .background(.regularMaterial, in: Capsule())
+                    }
+                }
+            }
+            .padding(.horizontal)
+        }
+    }
+}
+
+/// Group photo, or a colored monogram fallback.
+struct GroupAvatarView: View {
+    let group: Group
+    var size: CGFloat = 44
+
+    var body: some View {
+        SwiftUI.Group {
+            if let path = group.coverPhoto,
+               let url = SupabaseService.shared.groupCoverURL(path) {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    monogram
+                }
+            } else {
+                monogram
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+    }
+
+    private var monogram: some View {
+        ZStack {
+            Circle().fill(Color(uiColor: UIColor(hex: GroupPalette.fallbacks[
+                abs(group.id.hashValue) % GroupPalette.fallbacks.count
+            ]) ?? .systemGray3).opacity(0.85))
+            Text(String(group.name.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased())
+                .font(.system(size: size * 0.44, weight: .semibold))
+                .foregroundStyle(.white)
+        }
     }
 }
 
@@ -80,8 +172,13 @@ final class GroupGlobeViewModel: ObservableObject {
     @Published var entriesByCountry: [String: [Entry]] = [:]
     @Published var memberIds: [UUID] = []
     @Published var usersById: [UUID: Profile] = [:]
+    /// Profiles with their color replaced by the group palette assignment —
+    /// what every group surface (globe, legend, panel dots) should use.
+    @Published var paletteProfiles: [UUID: Profile] = [:]
     @Published var myId: UUID?
     @Published var loading = false
+
+    private var assignedColors: [UUID: String] = [:]
 
     func load(group: Group) async {
         loading = true
@@ -101,6 +198,12 @@ final class GroupGlobeViewModel: ObservableObject {
             entriesByCountry = byCountry
             let profiles = try await SupabaseService.shared.profiles(ids: ids)
             usersById = Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, $0) })
+            assignedColors = GroupPalette.assign(memberIds: ids, profiles: usersById)
+            paletteProfiles = usersById.mapValues { profile in
+                var p = profile
+                p.color = assignedColors[p.id] ?? p.color
+                return p
+            }
         } catch {
             statusByCountry = [:]
             entriesByCountry = [:]
@@ -117,10 +220,13 @@ final class GroupGlobeViewModel: ObservableObject {
             let mine = myId.map { tasters.contains($0) } ?? false
             return mine ? GlobeViewModel.opaque(myColor, 0.64 + boost) : untouched
         case .solidarity:
-            guard !tasters.isEmpty, !memberIds.isEmpty else { return untouched }
-            // Warmer the more members have been.
-            let share = CGFloat(tasters.count) / CGFloat(memberIds.count)
-            return GlobeViewModel.opaque(GlobeViewModel.amber, min(1, 0.45 + 0.35 * share + boost))
+            guard !tasters.isEmpty else { return untouched }
+            // Each member paints in their own color; shared countries blend.
+            let colors = tasters.compactMap { assignedColors[$0].flatMap { UIColor(hex: $0) } }
+            guard !colors.isEmpty else { return untouched }
+            let blended = Self.blend(colors)
+            let depth = min(0.18, CGFloat(tasters.count - 1) * 0.06)
+            return GlobeViewModel.opaque(blended, min(0.9, 0.6 + depth + boost))
         case .consensus:
             let everyone = !memberIds.isEmpty && tasters.count >= memberIds.count
             return everyone ? GlobeViewModel.opaque(GlobeViewModel.purple, 0.7 + boost) : untouched
@@ -132,7 +238,18 @@ final class GroupGlobeViewModel: ObservableObject {
     }
 
     private var myColor: UIColor {
-        (myId.flatMap { usersById[$0]?.color }).flatMap { UIColor(hex: $0) } ?? GlobeViewModel.amber
+        (myId.flatMap { assignedColors[$0] }).flatMap { UIColor(hex: $0) } ?? GlobeViewModel.amber
+    }
+
+    private static func blend(_ colors: [UIColor]) -> UIColor {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
+        for color in colors {
+            var cr: CGFloat = 0, cg: CGFloat = 0, cb: CGFloat = 0, ca: CGFloat = 0
+            color.getRed(&cr, green: &cg, blue: &cb, alpha: &ca)
+            r += cr; g += cg; b += cb
+        }
+        let n = CGFloat(colors.count)
+        return UIColor(red: r / n, green: g / n, blue: b / n, alpha: 1)
     }
 }
 
@@ -152,7 +269,7 @@ private struct GroupCountryPanel: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(country.cuisineName).font(.headline)
                     Text("\(tasters.count) of \(memberCount) have tried it")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(Color(.secondaryLabel))
                 }
                 Spacer()
                 if entries.count > 1 {

@@ -125,9 +125,55 @@ final class SupabaseService {
     }
 
     func groupMemberIds(groupId: UUID) async throws -> [UUID] {
-        let rows: [GroupMember] = try await client.from("group_members").select()
+        try await groupMembers(groupId: groupId).map(\.userId)
+    }
+
+    func groupMembers(groupId: UUID) async throws -> [GroupMember] {
+        try await client.from("group_members").select()
             .eq("group_id", value: groupId).execute().value
-        return rows.map(\.userId)
+    }
+
+    /// Fresh copy of one group (post-edit refresh); nil if we lost access.
+    func group(id: UUID) async throws -> Group? {
+        let rows: [Group] = try await client.from("groups").select()
+            .eq("id", value: id).limit(1).execute().value
+        return rows.first
+    }
+
+    /// Owner-only edits (RLS enforces ownership). Nil fields are left untouched.
+    struct GroupPatch: Encodable {
+        var name: String?
+        var inviteCode: String?
+        var coverPhoto: String?
+    }
+
+    func updateGroup(id: UUID, _ patch: GroupPatch) async throws {
+        try await client.from("groups").update(patch).eq("id", value: id).execute()
+    }
+
+    /// Upload a group photo; returns the stored path for groups.cover_photo.
+    /// Unique name per upload — the bucket has no UPDATE policy, so overwriting
+    /// in place isn't possible (old covers are orphaned, which is fine).
+    func uploadGroupCover(groupId: UUID, _ jpeg: Data) async throws -> String {
+        let path = "\(groupId.uuidString)/\(UUID().uuidString).jpg"
+        try await client.storage.from("group-covers").upload(
+            path, data: jpeg,
+            options: FileOptions(cacheControl: "3600", contentType: "image/jpeg", upsert: false)
+        )
+        return path
+    }
+
+    /// Public URL for a group cover (the bucket is public by design).
+    func groupCoverURL(_ path: String) -> URL? {
+        try? client.storage.from("group-covers").getPublicURL(path: path)
+    }
+
+    func leaveGroup(groupId: UUID) async throws {
+        let session = try await client.auth.session
+        try await client.from("group_members").delete()
+            .eq("group_id", value: groupId)
+            .eq("user_id", value: session.user.id)
+            .execute()
     }
 
     /// Entries for a set of users (RLS returns only what the caller may read —
@@ -187,6 +233,16 @@ final class SupabaseService {
     func comments(postId: UUID) async throws -> [PostComment] {
         try await client.from("post_comments").select()
             .eq("post_id", value: postId)
+            .order("created_at", ascending: true)
+            .execute().value
+    }
+
+    /// All comments for a batch of posts — the chat renders threads inline, so
+    /// it loads every visible post's comments in one query.
+    func comments(postIds: [UUID]) async throws -> [PostComment] {
+        guard !postIds.isEmpty else { return [] }
+        return try await client.from("post_comments").select()
+            .in("post_id", values: postIds)
             .order("created_at", ascending: true)
             .execute().value
     }

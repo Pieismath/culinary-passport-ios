@@ -1,55 +1,69 @@
 import SwiftUI
 import Supabase
+import UIKit
 
-/// v1.2: the group feed — posts, emoji reactions, comments.
-/// Live-updating: a realtime channel on the three feed tables reloads the
-/// feed in place (pull-to-refresh stays as the manual fallback).
+/// The group chat: messages with their replies threaded INLINE underneath
+/// (no comments-behind-a-tap), live via realtime, iMessage-adjacent styling.
+/// Reached from the group home — the globe stays the main event.
 struct GroupFeedView: View {
     let group: Group
 
     @State private var posts: [GroupPost] = []
+    @State private var commentsByPost: [UUID: [PostComment]] = [:]
     @State private var authors: [UUID: Profile] = [:]
     @State private var reactionsByPost: [UUID: [PostReaction]] = [:]
     @State private var myId: UUID?
     @State private var composerText = ""
+    @State private var replyTo: GroupPost?
     @State private var error: String?
     @State private var reloadDebounce: Task<Void, Never>?
 
     private let quickEmoji = ["😋", "🔥", "❤️", "😂"]
 
     var body: some View {
-        List {
-            Section {
-                HStack {
-                    TextField("Share something…", text: $composerText, axis: .vertical)
-                    Button("Post") { Task { await post() } }
-                        .disabled(composerText.trimmingCharacters(in: .whitespaces).isEmpty)
+        ScrollViewReader { proxy in
+            List {
+                if posts.isEmpty {
+                    ContentUnavailableView(
+                        "Say something",
+                        systemImage: "bubble.left.and.bubble.right",
+                        description: Text("Meals you log also drop into the chat for everyone to see.")
+                    )
+                    .listRowSeparator(.hidden)
+                }
+                // Chat order: oldest at the top, newest by the composer.
+                ForEach(posts.reversed()) { post in
+                    MessageRow(
+                        post: post,
+                        comments: commentsByPost[post.id] ?? [],
+                        authors: authors,
+                        reactions: reactionsByPost[post.id] ?? [],
+                        myId: myId,
+                        quickEmoji: quickEmoji,
+                        onReact: { emoji, on in Task { await react(post: post, emoji: emoji, on: on) } },
+                        onReply: { replyTo = post }
+                    )
+                    .id(post.id)
+                    .listRowSeparator(.hidden)
+                }
+                if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            }
+            .listStyle(.plain)
+            .safeAreaInset(edge: .bottom) { composer }
+            .onChange(of: posts.first?.id) {
+                if let newest = posts.first?.id {
+                    withAnimation { proxy.scrollTo(newest, anchor: .bottom) }
                 }
             }
-            ForEach(posts) { post in
-                PostRow(
-                    post: post,
-                    author: authors[post.authorId],
-                    reactions: reactionsByPost[post.id] ?? [],
-                    myId: myId,
-                    quickEmoji: quickEmoji,
-                    onReact: { emoji, on in Task { await react(post: post, emoji: emoji, on: on) } }
-                )
-            }
-            if let error { Text(error).font(.caption).foregroundStyle(.red) }
         }
-        .navigationTitle(group.name)
+        .navigationTitle("\(group.name) chat")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
+            ToolbarItem(placement: .primaryAction) {
                 NavigationLink {
                     SyncedMealsView(group: group)
                 } label: {
                     BrandedIcon(name: "feature-sync", size: 22)
-                }
-                NavigationLink {
-                    GroupGlobeView(group: group)
-                } label: {
-                    BrandedIcon(name: "tab-globe", size: 22)
                 }
             }
         }
@@ -58,12 +72,63 @@ struct GroupFeedView: View {
         .refreshable { await reload() }
     }
 
-    /// Finding 7: subscribe to the feed tables and reload in place. Posts are
-    /// filtered to this group server-side; comments/reactions carry no
-    /// group_id column to filter on, so any event just debounce-reloads (RLS
-    /// already scopes what we receive to groups we belong to). The `.task`
-    /// modifier cancels on disappear, which ends the streams and tears the
-    /// channel down.
+    // ── Composer (message, or threaded reply when a target is set) ───────────
+
+    private var composer: some View {
+        VStack(spacing: 6) {
+            if let replyTo {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrowshape.turn.up.left.fill")
+                        .font(.caption2)
+                    Text("Replying to \(authors[replyTo.authorId]?.name ?? "someone"): \(replyTo.text)")
+                        .font(.caption)
+                        .lineLimit(1)
+                    Spacer()
+                    Button {
+                        self.replyTo = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").font(.caption)
+                    }
+                }
+                .foregroundStyle(Color(.secondaryLabel))
+                .padding(.horizontal, 12)
+            }
+            HStack(spacing: 8) {
+                TextField(replyTo == nil ? "Message…" : "Reply…", text: $composerText, axis: .vertical)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 18))
+                Button {
+                    Task { await send() }
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill").font(.title2)
+                }
+                .disabled(composerText.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(.horizontal, 12)
+        }
+        .padding(.vertical, 8)
+        .background(.regularMaterial)
+    }
+
+    private func send() async {
+        let text = composerText.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return }
+        do {
+            if let replyTo {
+                try await SupabaseService.shared.addComment(postId: replyTo.id, text: text)
+            } else {
+                try await SupabaseService.shared.createPost(groupId: group.id, text: text)
+            }
+            composerText = ""
+            replyTo = nil
+            await reload()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    /// Finding 7: live chat. Posts are filtered to this group server-side;
+    /// comments/reactions carry no group_id, so any event debounce-reloads
+    /// (RLS scopes what we receive). `.task` cancellation tears it down.
     private func listenForChanges() async {
         let client = SupabaseService.shared.client
         let channel = client.channel("group-feed-\(group.id.uuidString)")
@@ -76,7 +141,6 @@ struct GroupFeedView: View {
         do {
             try await channel.subscribeWithError()
         } catch {
-            // No realtime → the feed still works via pull-to-refresh.
             await client.removeChannel(channel)
             return
         }
@@ -89,7 +153,6 @@ struct GroupFeedView: View {
         await client.removeChannel(channel)
     }
 
-    /// Collapse event bursts (a post + its auto-reactions) into one reload.
     @MainActor
     private func reloadSoon() {
         reloadDebounce?.cancel()
@@ -105,21 +168,27 @@ struct GroupFeedView: View {
         do {
             myId = try? await SupabaseService.shared.client.auth.session.user.id
             posts = try await SupabaseService.shared.feedPosts(groupId: group.id)
-            let authorList = try await SupabaseService.shared.profiles(ids: Array(Set(posts.map(\.authorId))))
-            authors = Dictionary(uniqueKeysWithValues: authorList.map { ($0.id, $0) })
+            let allComments = try await SupabaseService.shared.comments(postIds: posts.map(\.id))
+            commentsByPost = Dictionary(grouping: allComments, by: \.postId)
+
+            // Colors consistent with the group globe legend.
+            let memberIds = (try? await SupabaseService.shared.groupMemberIds(groupId: group.id)) ?? []
+            var authorIds = Set(posts.map(\.authorId)).union(allComments.map(\.authorId))
+            authorIds.formUnion(memberIds)
+            let profiles = try await SupabaseService.shared.profiles(ids: Array(authorIds))
+            let byId = Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, $0) })
+            let palette = GroupPalette.assign(memberIds: memberIds, profiles: byId)
+            authors = byId.mapValues { profile in
+                var p = profile
+                p.color = palette[p.id] ?? p.color
+                return p
+            }
+
             let allReactions = try await SupabaseService.shared.reactions(postIds: posts.map(\.id))
             reactionsByPost = Dictionary(grouping: allReactions, by: \.postId)
         } catch {
             self.error = error.localizedDescription
         }
-    }
-
-    private func post() async {
-        do {
-            try await SupabaseService.shared.createPost(groupId: group.id, text: composerText)
-            composerText = ""
-            await reload()
-        } catch { self.error = error.localizedDescription }
     }
 
     private func react(post: GroupPost, emoji: String, on: Bool) async {
@@ -128,27 +197,41 @@ struct GroupFeedView: View {
     }
 }
 
-private struct PostRow: View {
+// ── One message + its inline thread ─────────────────────────────────────────
+
+private struct MessageRow: View {
     let post: GroupPost
-    let author: Profile?
+    let comments: [PostComment]
+    let authors: [UUID: Profile]
     let reactions: [PostReaction]
     let myId: UUID?
     let quickEmoji: [String]
     let onReact: (String, Bool) -> Void
+    let onReply: () -> Void
 
-    @State private var showComments = false
     @State private var linkedEntry: Entry?
 
+    private func color(_ id: UUID) -> Color {
+        Color(uiColor: UIColor(hex: authors[id]?.color ?? "") ?? .systemGray)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(author?.name ?? "Someone").font(.subheadline.bold())
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Circle().fill(color(post.authorId)).frame(width: 9, height: 9)
+                Text(authors[post.authorId]?.name ?? "Someone").font(.subheadline.bold())
                 Spacer()
                 Text(post.createdAt, style: .relative)
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.caption2).foregroundStyle(Color(.secondaryLabel))
             }
-            if !post.text.isEmpty { Text(post.text) }
-            // When the post links a logged meal, show a compact card for it.
+
+            if !post.text.isEmpty {
+                Text(post.text)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 14))
+            }
+            // When the message links a logged meal, show its compact card.
             if let entry = linkedEntry { LinkedMealCard(entry: entry) }
 
             HStack(spacing: 6) {
@@ -160,23 +243,44 @@ private struct PostRow: View {
                     } label: {
                         Text(count > 0 ? "\(emoji) \(count)" : emoji)
                             .font(.caption)
-                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .padding(.horizontal, 7).padding(.vertical, 3)
                             .background(mine ? Color.accentColor.opacity(0.18) : Color(.systemGray6),
                                         in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }
                 Spacer()
-                Button {
-                    showComments = true
-                } label: {
-                    Label("Comments", systemImage: "bubble.right").font(.caption)
+                Button(action: onReply) {
+                    Label("Reply", systemImage: "arrowshape.turn.up.left")
+                        .font(.caption)
                 }
                 .buttonStyle(.plain)
+                .foregroundStyle(Color(.secondaryLabel))
+            }
+
+            // The thread, right here under the message.
+            if !comments.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(comments) { comment in
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Circle().fill(color(comment.authorId)).frame(width: 7, height: 7)
+                            Text(authors[comment.authorId]?.name ?? "Someone")
+                                .font(.caption.bold())
+                            Text(comment.text).font(.callout)
+                        }
+                    }
+                }
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color(.systemGray4))
+                        .frame(width: 2)
+                        .clipShape(Capsule())
+                }
+                .padding(.leading, 4)
             }
         }
-        .padding(.vertical, 4)
-        .sheet(isPresented: $showComments) { CommentsSheet(post: post) }
+        .padding(.vertical, 5)
         .task(id: post.entryId) {
             guard let entryId = post.entryId else { linkedEntry = nil; return }
             linkedEntry = try? await SupabaseService.shared.entry(id: entryId)
@@ -184,9 +288,8 @@ private struct PostRow: View {
     }
 }
 
-/// Compact card for a meal a post links to — flag/photo, restaurant, cuisine,
-/// rating. Mirrors EntryRow's styling in a boxed, feed-friendly form.
-private struct LinkedMealCard: View {
+/// Compact card for a meal a message links to.
+struct LinkedMealCard: View {
     let entry: Entry
 
     var body: some View {
@@ -212,7 +315,7 @@ private struct LinkedMealCard: View {
                 Text(entry.restaurantName).font(.subheadline.bold())
                 Text(CountryStore.byCode[entry.countryCode]?.cuisineName ?? entry.countryCode)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color(.secondaryLabel))
             }
             Spacer()
             Text(String(repeating: "★", count: entry.rating))
@@ -221,47 +324,5 @@ private struct LinkedMealCard: View {
         }
         .padding(8)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-    }
-}
-
-private struct CommentsSheet: View {
-    let post: GroupPost
-
-    @State private var comments: [PostComment] = []
-    @State private var authors: [UUID: Profile] = [:]
-    @State private var draft = ""
-
-    var body: some View {
-        NavigationStack {
-            List {
-                ForEach(comments) { comment in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(authors[comment.authorId]?.name ?? "Someone")
-                            .font(.caption.bold())
-                        Text(comment.text)
-                    }
-                    .padding(.leading, comment.parentId == nil ? 0 : 20) // threaded replies
-                }
-                HStack {
-                    TextField("Add a comment…", text: $draft)
-                    Button("Send") { Task { await send() } }
-                        .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            }
-            .navigationTitle("Comments")
-            .task { await reload() }
-        }
-    }
-
-    private func reload() async {
-        comments = (try? await SupabaseService.shared.comments(postId: post.id)) ?? []
-        let authorList = (try? await SupabaseService.shared.profiles(ids: Array(Set(comments.map(\.authorId))))) ?? []
-        authors = Dictionary(uniqueKeysWithValues: authorList.map { ($0.id, $0) })
-    }
-
-    private func send() async {
-        try? await SupabaseService.shared.addComment(postId: post.id, text: draft)
-        draft = ""
-        await reload()
     }
 }
