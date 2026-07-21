@@ -17,8 +17,8 @@ struct GroupFeedView: View {
     @State private var replyTo: GroupPost?
     @State private var error: String?
     @State private var reloadDebounce: Task<Void, Never>?
-
-    private let quickEmoji = ["😋", "🔥", "❤️", "😂"]
+    /// Post awaiting an emoji from the picker.
+    @State private var reactingTo: GroupPost?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -39,8 +39,8 @@ struct GroupFeedView: View {
                         authors: authors,
                         reactions: reactionsByPost[post.id] ?? [],
                         myId: myId,
-                        quickEmoji: quickEmoji,
-                        onReact: { emoji, on in Task { await react(post: post, emoji: emoji, on: on) } },
+                        onToggle: { emoji, on in Task { await react(post: post, emoji: emoji, on: on) } },
+                        onAddReaction: { reactingTo = post },
                         onReply: { replyTo = post }
                     )
                     .id(post.id)
@@ -70,6 +70,11 @@ struct GroupFeedView: View {
         .task { await reload() }
         .task { await listenForChanges() }
         .refreshable { await reload() }
+        .sheet(item: $reactingTo) { post in
+            EmojiPickerSheet { emoji in
+                Task { await react(post: post, emoji: emoji, on: true) }
+            }
+        }
     }
 
     // ── Composer (message, or threaded reply when a target is set) ───────────
@@ -205,14 +210,22 @@ private struct MessageRow: View {
     let authors: [UUID: Profile]
     let reactions: [PostReaction]
     let myId: UUID?
-    let quickEmoji: [String]
-    let onReact: (String, Bool) -> Void
+    let onToggle: (String, Bool) -> Void
+    let onAddReaction: () -> Void
     let onReply: () -> Void
 
     @State private var linkedEntry: Entry?
 
     private func color(_ id: UUID) -> Color {
         Color(uiColor: UIColor(hex: authors[id]?.color ?? "") ?? .systemGray)
+    }
+
+    /// Distinct emoji on this message, most-reacted first, stable thereafter.
+    private var tallies: [(emoji: String, count: Int, mine: Bool)] {
+        Dictionary(grouping: reactions, by: \.emoji)
+            .map { (emoji: $0.key, count: $0.value.count,
+                    mine: $0.value.contains { $0.userId == myId }) }
+            .sorted { ($0.count, $1.emoji) > ($1.count, $0.emoji) }
     }
 
     var body: some View {
@@ -234,21 +247,45 @@ private struct MessageRow: View {
             // When the message links a logged meal, show its compact card.
             if let entry = linkedEntry { LinkedMealCard(entry: entry) }
 
+            // Only reactions people actually added show up — each with its
+            // count, mine highlighted, tap to add/remove yours.
             HStack(spacing: 6) {
-                ForEach(quickEmoji, id: \.self) { emoji in
-                    let count = reactions.filter { $0.emoji == emoji }.count
-                    let mine = reactions.contains { $0.emoji == emoji && $0.userId == myId }
-                    Button {
-                        onReact(emoji, !mine)
-                    } label: {
-                        Text(count > 0 ? "\(emoji) \(count)" : emoji)
-                            .font(.caption)
-                            .padding(.horizontal, 7).padding(.vertical, 3)
-                            .background(mine ? Color.accentColor.opacity(0.18) : Color(.systemGray6),
-                                        in: Capsule())
+                if !tallies.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(tallies, id: \.emoji) { tally in
+                                Button {
+                                    onToggle(tally.emoji, !tally.mine)
+                                } label: {
+                                    HStack(spacing: 3) {
+                                        Text(tally.emoji)
+                                        Text("\(tally.count)").monospacedDigit()
+                                    }
+                                    .font(.caption)
+                                    .padding(.horizontal, 7).padding(.vertical, 3)
+                                    .background(tally.mine ? Color.accentColor.opacity(0.18) : Color(.systemGray6),
+                                                in: Capsule())
+                                    .overlay {
+                                        if tally.mine {
+                                            Capsule().stroke(Color.accentColor.opacity(0.55), lineWidth: 1)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
                     }
-                    .buttonStyle(.plain)
                 }
+                Button(action: onAddReaction) {
+                    Image(systemName: "face.smiling")
+                        .font(.caption)
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Color(.systemGray6), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color(.secondaryLabel))
+                .accessibilityLabel("Add a reaction")
+
                 Spacer()
                 Button(action: onReply) {
                     Label("Reply", systemImage: "arrowshape.turn.up.left")

@@ -74,8 +74,6 @@ struct ProfileView: View {
         VStack(spacing: 10) {
             ZStack(alignment: .bottomTrailing) {
                 ProfilePhotoView(url: avatarURL, size: 104)
-                    .background(Circle().fill(.white).padding(-4))
-                    .overlay(Circle().stroke(.white, lineWidth: 3).padding(-4))
                     .shadow(color: .black.opacity(0.10), radius: 8, y: 3)
                     .overlay {
                         if busy {
@@ -207,9 +205,18 @@ struct ProfileView: View {
     private var actionRows: some View {
         VStack(spacing: 0) {
             NavigationLink {
+                CuisineSuggestionsView(entries: entries)
+            } label: {
+                ActionRow(icon: "sparkle.magnifyingglass", tint: .teal, title: "Recommended for you")
+            }
+            .buttonStyle(.plain)
+
+            Divider().padding(.leading, 56)
+
+            NavigationLink {
                 WrappedView()
             } label: {
-                ActionRow(icon: "sparkles", tint: .pink, title: "Year in review")
+                ActionRow(image: "feature-rewind", tint: .pink, title: "Year in review")
             }
             .buttonStyle(.plain)
         }
@@ -218,17 +225,14 @@ struct ProfileView: View {
     }
 
     private var signOut: some View {
-        Button(role: .destructive) {
+        Button {
             Task { try? await SupabaseService.shared.client.auth.signOut() }
         } label: {
             Text("Sign out")
-                .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
+                .font(.subheadline)
+                .foregroundStyle(.red)
         }
-        .buttonStyle(.bordered)
-        .tint(.red)
-        .padding(.top, 4)
+        .padding(.top, 10)
     }
 
     // ── Data ─────────────────────────────────────────────────────────────────
@@ -482,17 +486,24 @@ private struct InsightCard: View {
 }
 
 private struct ActionRow: View {
-    let icon: String
+    var icon: String? = nil
+    /// Branded asset alternative to an SF Symbol.
+    var image: String? = nil
     let tint: Color
     let title: String
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 30, height: 30)
-                .background(RoundedRectangle(cornerRadius: 8).fill(tint.gradient))
+            SwiftUI.Group {
+                if let image {
+                    BrandedIcon(name: image, size: 17)
+                } else if let icon {
+                    Image(systemName: icon).font(.subheadline.weight(.semibold))
+                }
+            }
+            .foregroundStyle(.white)
+            .frame(width: 30, height: 30)
+            .background(RoundedRectangle(cornerRadius: 8).fill(tint.gradient))
             Text(title).foregroundStyle(.primary)
             Spacer()
             Image(systemName: "chevron.right")
@@ -515,6 +526,7 @@ struct ProfileEditSheet: View {
     @State private var username: String
     @State private var bio: String
     @State private var isPublic: Bool
+    @State private var color: String
     @State private var saving = false
     @State private var error: String?
 
@@ -525,6 +537,7 @@ struct ProfileEditSheet: View {
         _username = State(initialValue: profile.username ?? "")
         _bio = State(initialValue: profile.bio ?? "")
         _isPublic = State(initialValue: profile.isPublic ?? false)
+        _color = State(initialValue: profile.color.lowercased())
     }
 
     var body: some View {
@@ -538,6 +551,32 @@ struct ProfileEditSheet: View {
                 }
                 Section("Bio") {
                     TextField("A line about your taste", text: $bio, axis: .vertical)
+                }
+                Section {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 8), spacing: 12) {
+                        ForEach(GroupPalette.fallbacks, id: \.self) { swatch in
+                            Button {
+                                color = swatch
+                            } label: {
+                                Circle()
+                                    .fill(Color(uiColor: UIColor(hex: swatch) ?? .systemGray))
+                                    .frame(height: 30)
+                                    .overlay {
+                                        if swatch == color {
+                                            Image(systemName: "checkmark")
+                                                .font(.caption.weight(.bold))
+                                                .foregroundStyle(.white)
+                                        }
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                } header: {
+                    Text("Your color")
+                } footer: {
+                    Text("This is you on every globe. If someone in a group already uses your color, yours shifts to the next free one there so no two members ever match.")
                 }
                 Section {
                     Toggle("Public profile", isOn: $isPublic)
@@ -567,7 +606,8 @@ struct ProfileEditSheet: View {
                 name: name,
                 username: trimmedUser.isEmpty ? nil : trimmedUser,
                 bio: bio.trimmingCharacters(in: .whitespaces).isEmpty ? nil : bio,
-                isPublic: isPublic
+                isPublic: isPublic,
+                color: color
             )
             await onSave()
             dismiss()

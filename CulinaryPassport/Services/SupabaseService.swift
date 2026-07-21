@@ -176,6 +176,11 @@ final class SupabaseService {
         try? client.storage.from("group-covers").getPublicURL(path: path)
     }
 
+    /// Owner-only (RLS). Members, posts, comments and reactions cascade.
+    func deleteGroup(id: UUID) async throws {
+        try await client.from("groups").delete().eq("id", value: id).execute()
+    }
+
     func leaveGroup(groupId: UUID) async throws {
         let session = try await client.auth.session
         try await client.from("group_members").delete()
@@ -226,8 +231,11 @@ final class SupabaseService {
     func toggleReaction(postId: UUID, emoji: String, on: Bool) async throws {
         let session = try await client.auth.session
         if on {
+            // Idempotent: picking an emoji you've already used must not blow up
+            // on the (post, user, emoji) primary key.
             try await client.from("post_reactions")
-                .insert(["post_id": postId.uuidString, "user_id": session.user.id.uuidString, "emoji": emoji])
+                .upsert(["post_id": postId.uuidString, "user_id": session.user.id.uuidString, "emoji": emoji],
+                        onConflict: "post_id,user_id,emoji")
                 .execute()
         } else {
             try await client.from("post_reactions").delete()
@@ -274,16 +282,20 @@ final class SupabaseService {
     }
 
     /// Editable profile fields — username uniqueness is enforced by the DB.
-    func updateMyProfile(name: String, username: String?, bio: String?, isPublic: Bool) async throws {
+    /// `color` is the user's globe color; groups re-map duplicates at render
+    /// time (GroupPalette), so two members never share a color in one group.
+    func updateMyProfile(name: String, username: String?, bio: String?,
+                         isPublic: Bool, color: String) async throws {
         struct Patch: Encodable {
             let name: String
             let username: String?
             let bio: String?
             let isPublic: Bool
+            let color: String
         }
         let session = try await client.auth.session
         try await client.from("profiles")
-            .update(Patch(name: name, username: username, bio: bio, isPublic: isPublic))
+            .update(Patch(name: name, username: username, bio: bio, isPublic: isPublic, color: color))
             .eq("id", value: session.user.id)
             .execute()
     }

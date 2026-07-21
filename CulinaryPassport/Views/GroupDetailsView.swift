@@ -20,6 +20,7 @@ struct GroupDetailsView: View {
     @State private var busy = false
     @State private var status: String?
     @State private var confirmLeave = false
+    @State private var confirmDelete = false
 
     private var isOwner: Bool { myId == group.createdBy }
 
@@ -115,9 +116,15 @@ struct GroupDetailsView: View {
                     }
                 }
 
-                if !isOwner {
-                    Section {
+                Section {
+                    if isOwner {
+                        Button("Delete group", role: .destructive) { confirmDelete = true }
+                    } else {
                         Button("Leave group", role: .destructive) { confirmLeave = true }
+                    }
+                } footer: {
+                    if isOwner {
+                        Text("Deleting removes the group, its chat and everyone's membership. Your logged meals stay in your journal.")
                     }
                 }
 
@@ -140,6 +147,11 @@ struct GroupDetailsView: View {
                 Button("Leave", role: .destructive) { Task { await leave() } }
             } message: {
                 Text("You'll need an invite code to rejoin.")
+            }
+            .confirmationDialog("Delete \(group.name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                Button("Delete group", role: .destructive) { Task { await deleteGroup() } }
+            } message: {
+                Text("This can't be undone — the chat and everyone's membership go with it.")
             }
         }
     }
@@ -191,6 +203,14 @@ struct GroupDetailsView: View {
             group.coverPhoto = path
             status = "Photo updated"
             await onChanged()
+        } catch { status = error.localizedDescription }
+    }
+
+    private func deleteGroup() async {
+        do {
+            try await SupabaseService.shared.deleteGroup(id: group.id)
+            dismiss()
+            onLeft()
         } catch { status = error.localizedDescription }
     }
 
