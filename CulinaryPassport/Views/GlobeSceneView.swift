@@ -16,7 +16,7 @@ struct GlobeSceneView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            GlobeBackdrop()
+            GlobeBackdrop(triedCount: triedCount)
 
             GlobeCanvas(
                 color: { code, selected in vm.color(for: code, selected: selected) },
@@ -50,6 +50,11 @@ struct GlobeSceneView: View {
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .padding()
+            } else if !vm.loading && !focusing {
+                GlobeExploreCue()
+                    .padding(.horizontal, 54)
+                    .padding(.bottom, 28)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
         .overlay(alignment: .topLeading) { progressChips.padding(.leading, 16) }
@@ -122,8 +127,11 @@ struct GlobeSceneView: View {
         Button {
             spinGlobe()
         } label: {
-            Image(systemName: "dice.fill")
-                .font(.title2)
+            Image("action-spin")
+                .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .frame(width: 26, height: 26)
                 .symbolEffect(.pulse, isActive: focusing)
                 .padding(14)
                 .background(.regularMaterial, in: Circle())
@@ -137,8 +145,11 @@ struct GlobeSceneView: View {
         Button {
             showSearch = true
         } label: {
-            Image(systemName: "magnifyingglass")
-                .font(.title3.weight(.semibold))
+            Image("action-search")
+                .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .frame(width: 25, height: 25)
                 .padding(15)
                 .background(.regularMaterial, in: Circle())
                 .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
@@ -193,12 +204,16 @@ private struct ChipLabel: View {
 
 // ── Backdrop ─────────────────────────────────────────────────────────────────
 
-/// Warm paper behind the transparent SCNView: soft radial light, a halo the
-/// globe sits in, and faint dashed "orbit" rings. Light and clean — no glow.
+/// Warm paper behind the transparent SCNView: soft radial light and a porcelain
+/// halo. The useful editorial copy supplies structure; decorative orbit/grid
+/// lines deliberately stay out so the globe remains the one visual focus.
 private struct GlobeBackdrop: View {
+    let triedCount: Int
+
     var body: some View {
         GeometryReader { proxy in
             let side = min(proxy.size.width, proxy.size.height)
+            let ink = Color(red: 0.42, green: 0.37, blue: 0.29)
             ZStack {
                 RadialGradient(
                     colors: [Color(red: 0.985, green: 0.972, blue: 0.945),
@@ -214,19 +229,54 @@ private struct GlobeBackdrop: View {
                     .frame(width: side * 1.02, height: side * 1.02)
                     .blur(radius: 28)
 
-                // faint orbit rings
-                Circle()
-                    .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 7]))
-                    .foregroundStyle(Color(red: 0.72, green: 0.66, blue: 0.55).opacity(0.35))
-                    .frame(width: side * 1.14, height: side * 1.14)
-                Circle()
-                    .stroke(style: StrokeStyle(lineWidth: 1, dash: [2, 9]))
-                    .foregroundStyle(Color(red: 0.72, green: 0.66, blue: 0.55).opacity(0.22))
-                    .frame(width: side * 1.3, height: side * 1.3)
+                VStack(spacing: 5) {
+                    Text("YOUR CULINARY WORLD")
+                        .font(.caption2.weight(.semibold))
+                        .tracking(2.4)
+                    Text(triedCount == 0 ? "Every journey starts with one plate." : "Every meal leaves a mark.")
+                        .font(.system(.subheadline, design: .serif))
+                        .italic()
+                }
+                .foregroundStyle(ink.opacity(0.72))
+                .position(x: proxy.size.width / 2, y: proxy.size.height * 0.145)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .ignoresSafeArea()
+    }
+}
+
+/// Persistent, non-interactive gesture teaching. The globe has intentionally
+/// custom controls, so first-time users should not have to discover long-press
+/// logging by accident.
+private struct GlobeExploreCue: View {
+    var body: some View {
+        HStack(spacing: 11) {
+            Image("action-drag")
+                .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .frame(width: 25, height: 25)
+                .foregroundStyle(Color(red: 0.36, green: 0.31, blue: 0.24))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Drag to explore")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color(.label))
+                Text("Press and hold a country to log a meal")
+                    .font(.caption)
+                    .foregroundStyle(Color(.secondaryLabel))
+            }
+        }
+        .padding(.horizontal, 15)
+        .padding(.vertical, 11)
+        .background(.regularMaterial, in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(Color.white.opacity(0.55), lineWidth: 0.8)
+        }
+        .shadow(color: .black.opacity(0.07), radius: 8, y: 3)
+        .allowsHitTesting(false)
     }
 }
 
@@ -284,8 +334,11 @@ private struct CountryPanel: View {
 
             HStack(spacing: 10) {
                 Button(action: onLog) {
-                    Label(tasters.isEmpty ? "Log \(country.cuisineName) meal" : "Add another meal",
-                          systemImage: "plus.circle.fill")
+                    Label {
+                        Text(tasters.isEmpty ? "Log \(country.cuisineName) meal" : "Add another meal")
+                    } icon: {
+                        BrandedIcon(name: "action-add", size: 19)
+                    }
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
                 }
@@ -293,7 +346,11 @@ private struct CountryPanel: View {
                 .controlSize(.small)
 
                 Button(action: onFindNearby) {
-                    Label("Nearby", systemImage: "map")
+                    Label {
+                        Text("Nearby")
+                    } icon: {
+                        BrandedIcon(name: "action-nearby", size: 20)
+                    }
                         .font(.subheadline)
                 }
                 .buttonStyle(.bordered)
@@ -304,5 +361,20 @@ private struct CountryPanel: View {
         .padding()
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
         .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+    }
+}
+
+/// A vector asset rendered as a template so every branded icon inherits the
+/// surrounding control's tint and behaves like a native symbol.
+struct BrandedIcon: View {
+    let name: String
+    var size: CGFloat = 22
+
+    var body: some View {
+        Image(name)
+            .resizable()
+            .renderingMode(.template)
+            .scaledToFit()
+            .frame(width: size, height: size)
     }
 }

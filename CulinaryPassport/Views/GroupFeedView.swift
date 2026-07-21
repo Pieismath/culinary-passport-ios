@@ -44,12 +44,12 @@ struct GroupFeedView: View {
                 NavigationLink {
                     SyncedMealsView(group: group)
                 } label: {
-                    Image(systemName: "heart")
+                    BrandedIcon(name: "feature-sync", size: 22)
                 }
                 NavigationLink {
                     GroupGlobeView(group: group)
                 } label: {
-                    Image(systemName: "globe.americas")
+                    BrandedIcon(name: "tab-globe", size: 22)
                 }
             }
         }

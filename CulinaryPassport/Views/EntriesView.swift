@@ -35,7 +35,9 @@ struct EntriesView: View {
                         .pickerStyle(.segmented)
                     }
                     ToolbarItem(placement: .primaryAction) {
-                        Button { showAdd = true } label: { Image(systemName: "plus") }
+                        Button { showAdd = true } label: {
+                            BrandedIcon(name: "action-add", size: 22)
+                        }
                     }
                 }
                 .sheet(isPresented: $showAdd) {

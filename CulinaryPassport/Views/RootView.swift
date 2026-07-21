@@ -7,19 +7,19 @@ struct RootView: View {
     var body: some View {
         TabView(selection: $tab) {
             GlobeSceneView()
-                .tabItem { Label("Globe", systemImage: "globe.asia.australia") }
+                .tabItem { Label("Globe", image: "tab-globe") }
                 .tag("globe")
             EntriesView()
-                .tabItem { Label("Journal", systemImage: "clock") }
+                .tabItem { Label("Journal", image: "tab-journal") }
                 .tag("journal")
             GroupsView()
-                .tabItem { Label("Groups", systemImage: "person.3") }
+                .tabItem { Label("Groups", image: "tab-groups") }
                 .tag("groups")
             PeopleView()
-                .tabItem { Label("People", systemImage: "person.2") }
+                .tabItem { Label("People", image: "tab-people") }
                 .tag("people")
             ProfileView()
-                .tabItem { Label("Profile", systemImage: "person.crop.circle") }
+                .tabItem { Label("Profile", image: "tab-profile") }
                 .tag("profile")
         }
         #if DEBUG
