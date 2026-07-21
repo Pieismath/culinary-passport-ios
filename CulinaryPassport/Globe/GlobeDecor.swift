@@ -72,15 +72,40 @@ enum GlobeDecor {
         return node
     }
 
+    /// Straight-line political borders (the US–Canada 49th parallel, the
+    /// Sahara's ruler-drawn edges) carry only a handful of vertices, and a
+    /// long straight 3D chord between distant points cuts THROUGH the sphere —
+    /// the middle of the line sinks under the ocean/fill and vanishes. Keep
+    /// every rendered segment short so the polyline hugs the surface.
+    private static let maxSegmentDegrees = 2.0
+
     private static func append(rings: [Ring], radius: Double,
                                into vertices: inout [SCNVector3], indices: inout [Int32]) {
         for ring in rings {
             var loop = ring
             if loop.count > 1, loop.first == loop.last { loop.removeLast() }
             guard loop.count >= 3 else { continue }
+
+            // Densify in lng/lat space — the same straight-in-lng/lat path the
+            // fills follow, so line and fill edges stay coincident.
+            var dense: Ring = []
+            for i in 0..<loop.count {
+                let a = loop[i]
+                let b = loop[(i + 1) % loop.count]
+                dense.append(a)
+                let d = b - a
+                let length = max(abs(d.x), abs(d.y))
+                let steps = Int(length / maxSegmentDegrees)
+                if steps > 0 {
+                    for s in 1...steps {
+                        dense.append(a + d * (Double(s) / Double(steps + 1)))
+                    }
+                }
+            }
+
             let base = Int32(vertices.count)
-            vertices.append(contentsOf: loop.map { GlobeMath.vec3(lat: $0.y, lng: $0.x, radius: radius) })
-            let n = Int32(loop.count)
+            vertices.append(contentsOf: dense.map { GlobeMath.vec3(lat: $0.y, lng: $0.x, radius: radius) })
+            let n = Int32(dense.count)
             for i in 0..<n {
                 indices.append(base + i)
                 indices.append(base + (i + 1) % n)
