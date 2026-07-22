@@ -122,6 +122,7 @@ struct EntrySheet: View {
     @State private var suggestions: [PlacesService.Suggestion] = []
     @State private var searchTask: Task<Void, Never>?
     @State private var suppressSearch = false
+    @State private var places = PlacesService.Session()
 
     // Photos: existing stored paths (edit) + newly picked images pending upload.
     @State private var existingPhotos: [String] = []
@@ -284,7 +285,7 @@ struct EntrySheet: View {
             try? await Task.sleep(nanoseconds: 300_000_000) // debounce
             if Task.isCancelled { return }
             let bias = country.map { (lat: $0.centroid.lat, lng: $0.centroid.lng) }
-            let results = (try? await PlacesService.shared.autocomplete(text, near: bias)) ?? []
+            let results = (try? await places.autocomplete(text, near: bias)) ?? []
             if Task.isCancelled { return }
             await MainActor.run { suggestions = results }
         }
@@ -295,7 +296,7 @@ struct EntrySheet: View {
         restaurantName = s.mainText
         suggestions = []
         Task {
-            if let d = try? await PlacesService.shared.details(placeId: s.placeId) {
+            if let d = try? await places.details(placeId: s.placeId) {
                 await MainActor.run {
                     if let c = d.city, !c.isEmpty { city = c }
                     placeId = s.placeId

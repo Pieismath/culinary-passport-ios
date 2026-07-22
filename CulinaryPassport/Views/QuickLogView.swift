@@ -16,6 +16,7 @@ struct QuickLogView: View {
     @State private var searchTask: Task<Void, Never>?
 
     @State private var place: PlacesService.Details?
+    @State private var placeName = ""
     @State private var country: Country?
     @State private var rating = 4
     @State private var pickedItem: PhotosPickerItem?
@@ -25,7 +26,7 @@ struct QuickLogView: View {
     @State private var error: String?
     @State private var stamp: EntrySheet.StampInfo?
 
-    private let places = PlacesService()
+    @State private var places = PlacesService.Session()
 
     var body: some View {
         NavigationStack {
@@ -99,9 +100,12 @@ struct QuickLogView: View {
 
     private func pick(_ suggestion: PlacesService.Suggestion) async {
         do {
+            // The suggestion already carries the name and usually the cuisine
+            // types; details only fills in where it is.
+            placeName = suggestion.mainText
             let details = try await places.details(placeId: suggestion.placeId)
             place = details
-            if let code = PlacesService.cuisineCountry(fromTypes: details.types) {
+            if let code = PlacesService.cuisineCountry(fromTypes: suggestion.types + details.types) {
                 country = CountryStore.byCode[code]
             } else {
                 pickingCuisine = true // couldn't infer — one tap to choose
@@ -115,7 +119,7 @@ struct QuickLogView: View {
         if let place {
             VStack(spacing: 16) {
                 VStack(spacing: 3) {
-                    Text(place.name).font(.title3.bold())
+                    Text(placeName).font(.title3.bold())
                     if let city = place.city {
                         Text(city).font(.caption).foregroundStyle(Color(.secondaryLabel))
                     }
@@ -201,7 +205,7 @@ struct QuickLogView: View {
             try await SupabaseService.shared.addEntry(NewEntry(
                 userId: session.user.id,
                 countryCode: country.code,
-                restaurantName: place.name,
+                restaurantName: placeName,
                 city: place.city ?? "",
                 dateTried: fmt.string(from: Date()),
                 rating: rating,

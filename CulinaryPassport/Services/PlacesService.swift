@@ -13,13 +13,15 @@ struct PlacesService {
 
     struct Suggestion: Identifiable, Hashable {
         let placeId: String
-        let mainText: String       // "Chat Thai"
+        let mainText: String       // "Chat Thai" — the name, free with the suggestion
         let secondaryText: String  // "Campbell Street, Haymarket NSW, Australia"
+        /// Google place types ("thai_restaurant" …). Present here too, so most
+        /// cuisines are known before the details call even happens.
+        let types: [String]
         var id: String { placeId }
     }
 
     struct Details: Hashable {
-        let name: String
         let address: String
         let city: String?
         let lat: Double?
@@ -29,6 +31,28 @@ struct PlacesService {
         let countryCode: String?
         /// Google place types ("thai_restaurant", "ramen_restaurant" …).
         let types: [String]
+    }
+
+    /// One search: everything typed until a restaurant is picked.
+    ///
+    /// Google bills the autocomplete requests in a session for free when the
+    /// session ends in a Place Details call, so both calls must carry the same
+    /// token and the token must be retired once it's been spent. Hold one of
+    /// these per search screen rather than calling `PlacesService` directly.
+    @MainActor
+    final class Session {
+        private let places = PlacesService()
+        private var token = UUID().uuidString
+
+        func autocomplete(_ input: String,
+                          near bias: (lat: Double, lng: Double)?) async throws -> [Suggestion] {
+            try await places.autocomplete(input, near: bias, session: token)
+        }
+
+        func details(placeId: String) async throws -> Details {
+            defer { token = UUID().uuidString } // spent — the next search is a new session
+            return try await places.details(placeId: placeId, session: token)
+        }
     }
 
     /// Google cuisine-flavored place types → passport country. The address
@@ -50,12 +74,15 @@ struct PlacesService {
         return nil
     }
 
-    func autocomplete(_ input: String, near bias: (lat: Double, lng: Double)?) async throws -> [Suggestion] {
+    func autocomplete(_ input: String,
+                      near bias: (lat: Double, lng: Double)?,
+                      session: String? = nil) async throws -> [Suggestion] {
         let trimmed = input.trimmingCharacters(in: .whitespaces)
         guard trimmed.count >= 2 else { return [] }
         let req = AutocompleteRequest(
             input: trimmed,
-            bias: bias.map { Bias(lat: $0.lat, lng: $0.lng) }
+            bias: bias.map { Bias(lat: $0.lat, lng: $0.lng) },
+            sessionToken: session
         )
         let resp: AutocompleteResponse = try await SupabaseService.shared.client.functions.invoke(
             "places-proxy", options: .init(body: req), decoder: decoder
@@ -65,13 +92,14 @@ struct PlacesService {
             return Suggestion(
                 placeId: p.placeId,
                 mainText: p.structuredFormat?.mainText?.text ?? p.text?.text ?? "",
-                secondaryText: p.structuredFormat?.secondaryText?.text ?? ""
+                secondaryText: p.structuredFormat?.secondaryText?.text ?? "",
+                types: p.types ?? []
             )
         }
     }
 
-    func details(placeId: String) async throws -> Details {
-        let req = DetailsRequest(placeId: placeId)
+    func details(placeId: String, session: String? = nil) async throws -> Details {
+        let req = DetailsRequest(placeId: placeId, sessionToken: session)
         let resp: DetailsResponse = try await SupabaseService.shared.client.functions.invoke(
             "places-proxy", options: .init(body: req), decoder: decoder
         )
@@ -84,13 +112,12 @@ struct PlacesService {
             ?? component("postal_town")?.longText
             ?? component("administrative_area_level_2")?.longText
         return Details(
-            name: resp.displayName?.text ?? "",
             address: resp.formattedAddress ?? "",
             city: city,
             lat: resp.location?.latitude,
             lng: resp.location?.longitude,
             countryCode: component("country")?.shortText,
-            types: (resp.types ?? []) + (resp.primaryType.map { [$0] } ?? [])
+            types: resp.types ?? []
         )
     }
 
@@ -101,10 +128,12 @@ struct PlacesService {
         let kind = "autocomplete"
         let input: String
         let bias: Bias?
+        let sessionToken: String?
     }
     private struct DetailsRequest: Encodable {
         let kind = "details"
         let placeId: String
+        let sessionToken: String?
     }
 
     private struct AutocompleteResponse: Decodable {
@@ -117,6 +146,7 @@ struct PlacesService {
         let placeId: String
         let text: TextWire?
         let structuredFormat: StructuredFormat?
+        let types: [String]?
     }
     private struct StructuredFormat: Decodable {
         let mainText: TextWire?
@@ -127,10 +157,8 @@ struct PlacesService {
     private struct DetailsResponse: Decodable {
         let formattedAddress: String?
         let location: LocationWire?
-        let displayName: TextWire?
         let addressComponents: [AddressComponent]?
         let types: [String]?
-        let primaryType: String?
     }
     private struct LocationWire: Decodable { let latitude: Double; let longitude: Double }
     // Every field is optional on the wire — Google omits `types` (and
