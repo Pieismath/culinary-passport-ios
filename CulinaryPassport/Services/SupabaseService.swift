@@ -217,11 +217,18 @@ final class SupabaseService {
 
     // ── Group feed (v1.2) ────────────────────────────────────────────────────
 
-    func feedPosts(groupId: UUID) async throws -> [GroupPost] {
-        try await client.from("group_posts").select()
+    /// One page of chat, newest first. `before` pages into history.
+    func feedPosts(groupId: UUID, before: Date? = nil, limit: Int = 50) async throws -> [GroupPost] {
+        var query = client.from("group_posts").select()
             .eq("group_id", value: groupId)
+        if let before {
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            query = query.lt("created_at", value: iso.string(from: before))
+        }
+        return try await query
             .order("created_at", ascending: false)
-            .limit(50)
+            .limit(limit)
             .execute().value
     }
 
@@ -305,8 +312,11 @@ final class SupabaseService {
             let color: String
         }
         let session = try await client.auth.session
+        // Usernames are @handles: store lowercase so "Jason" and "jason"
+        // can't coexist as different people.
         try await client.from("profiles")
-            .update(Patch(name: name, username: username, bio: bio, isPublic: isPublic, color: color))
+            .update(Patch(name: name, username: username?.lowercased(), bio: bio,
+                          isPublic: isPublic, color: color))
             .eq("id", value: session.user.id)
             .execute()
     }
@@ -349,11 +359,14 @@ final class SupabaseService {
     }
 
     func followCounts(userId: UUID) async throws -> (followers: Int, following: Int) {
-        async let followers: [Follow] = client.from("follows").select()
-            .eq("followee_id", value: userId).execute().value
-        async let followingRows: [Follow] = client.from("follows").select()
-            .eq("follower_id", value: userId).execute().value
-        return (try await followers.count, try await followingRows.count)
+        // head:true + count → the DB counts; no rows cross the wire.
+        async let followers = client.from("follows")
+            .select("*", head: true, count: .exact)
+            .eq("followee_id", value: userId).execute().count
+        async let following = client.from("follows")
+            .select("*", head: true, count: .exact)
+            .eq("follower_id", value: userId).execute().count
+        return (try await followers ?? 0, try await following ?? 0)
     }
 
     /// Another user's public entries (RLS returns only rows they've shared).
@@ -438,6 +451,260 @@ final class SupabaseService {
             try await client.from("follows").delete()
                 .eq("follower_id", value: session.user.id)
                 .eq("followee_id", value: userId)
+                .execute()
+        }
+    }
+
+    // ── Want to Try (country wishlist + saved restaurants) ──────────────────
+
+    func wishlist() async throws -> Set<String> {
+        struct Row: Decodable { let countryCode: String }
+        let session = try await client.auth.session
+        let rows: [Row] = try await client.from("wishlist").select("country_code")
+            .eq("user_id", value: session.user.id).execute().value
+        return Set(rows.map(\.countryCode))
+    }
+
+    func setWishlisted(_ code: String, _ on: Bool) async throws {
+        let session = try await client.auth.session
+        if on {
+            try await client.from("wishlist")
+                .upsert(["country_code": code, "user_id": session.user.id.uuidString],
+                        onConflict: "country_code,user_id")
+                .execute()
+        } else {
+            try await client.from("wishlist").delete()
+                .eq("country_code", value: code)
+                .eq("user_id", value: session.user.id)
+                .execute()
+        }
+    }
+
+    func savedRestaurants() async throws -> [SavedRestaurant] {
+        let session = try await client.auth.session
+        return try await client.from("saved_restaurants").select()
+            .eq("user_id", value: session.user.id)
+            .order("created_at", ascending: false)
+            .execute().value
+    }
+
+    func saveRestaurant(name: String, city: String?, countryCode: String, note: String?) async throws {
+        struct Insert: Encodable {
+            let userId: UUID
+            let restaurantName: String
+            let city: String?
+            let countryCode: String
+            let note: String?
+        }
+        let session = try await client.auth.session
+        try await client.from("saved_restaurants")
+            .upsert(Insert(userId: session.user.id, restaurantName: name, city: city,
+                           countryCode: countryCode, note: note),
+                    onConflict: "user_id,restaurant_name,country_code")
+            .execute()
+    }
+
+    func unsaveRestaurant(id: UUID) async throws {
+        try await client.from("saved_restaurants").delete().eq("id", value: id).execute()
+    }
+
+    // ── Reactions & comments on meals ────────────────────────────────────────
+
+    func entryReactions(entryIds: [UUID]) async throws -> [EntryReaction] {
+        guard !entryIds.isEmpty else { return [] }
+        return try await client.from("entry_reactions").select()
+            .in("entry_id", values: entryIds).execute().value
+    }
+
+    func toggleEntryReaction(entryId: UUID, emoji: String, on: Bool) async throws {
+        let session = try await client.auth.session
+        if on {
+            try await client.from("entry_reactions")
+                .upsert(["entry_id": entryId.uuidString,
+                         "user_id": session.user.id.uuidString,
+                         "emoji": emoji],
+                        onConflict: "entry_id,user_id,emoji")
+                .execute()
+        } else {
+            try await client.from("entry_reactions").delete()
+                .eq("entry_id", value: entryId)
+                .eq("user_id", value: session.user.id)
+                .eq("emoji", value: emoji)
+                .execute()
+        }
+    }
+
+    func entryComments(entryId: UUID) async throws -> [EntryComment] {
+        try await client.from("entry_comments").select()
+            .eq("entry_id", value: entryId)
+            .order("created_at", ascending: true)
+            .execute().value
+    }
+
+    func addEntryComment(entryId: UUID, text: String) async throws {
+        struct Insert: Encodable { let entryId: UUID; let authorId: UUID; let text: String }
+        let session = try await client.auth.session
+        try await client.from("entry_comments")
+            .insert(Insert(entryId: entryId, authorId: session.user.id, text: text))
+            .execute()
+    }
+
+    func deleteEntryComment(id: UUID) async throws {
+        try await client.from("entry_comments").delete().eq("id", value: id).execute()
+    }
+
+    // ── Blocks & reports (UGC moderation) ────────────────────────────────────
+
+    func blockedIds() async throws -> Set<UUID> {
+        struct Row: Decodable { let blockedId: UUID }
+        let session = try await client.auth.session
+        let rows: [Row] = try await client.from("blocks").select("blocked_id")
+            .eq("blocker_id", value: session.user.id).execute().value
+        return Set(rows.map(\.blockedId))
+    }
+
+    func setBlocked(_ userId: UUID, _ blocked: Bool) async throws {
+        let session = try await client.auth.session
+        if blocked {
+            try await client.from("blocks")
+                .upsert(["blocker_id": session.user.id.uuidString, "blocked_id": userId.uuidString],
+                        onConflict: "blocker_id,blocked_id")
+                .execute()
+        } else {
+            try await client.from("blocks").delete()
+                .eq("blocker_id", value: session.user.id)
+                .eq("blocked_id", value: userId)
+                .execute()
+        }
+    }
+
+    /// Write-only moderation queue; reviewed out-of-band.
+    func report(contentType: String, contentId: UUID, reason: String) async throws {
+        struct Insert: Encodable {
+            let reporterId: UUID
+            let contentType: String
+            let contentId: UUID
+            let reason: String
+        }
+        let session = try await client.auth.session
+        try await client.from("reports")
+            .insert(Insert(reporterId: session.user.id, contentType: contentType,
+                           contentId: contentId, reason: reason))
+            .execute()
+    }
+
+    // ── Activity ("someone noticed you") ─────────────────────────────────────
+
+    /// Recent follows, reactions, and comments aimed at the current user,
+    /// newest first. Assembled from the base tables — no extra infra.
+    func activity(limit: Int = 60) async throws -> [ActivityItem] {
+        let session = try await client.auth.session
+        let me = session.user.id
+
+        struct FollowRow: Decodable { let followerId: UUID; let createdAt: Date }
+        async let followRows: [FollowRow] = client.from("follows").select()
+            .eq("followee_id", value: me)
+            .order("created_at", ascending: false)
+            .limit(limit)
+            .execute().value
+
+        let mine = try await myEntries()
+        let mineById = Dictionary(uniqueKeysWithValues: mine.map { ($0.id, $0) })
+        let ids = Array(mineById.keys)
+
+        async let reactionRows: [EntryReaction] = entryReactions(entryIds: ids)
+        struct CommentRow: Decodable {
+            let id: UUID; let entryId: UUID; let authorId: UUID
+            let text: String; let createdAt: Date
+        }
+        async let commentRows: [CommentRow] = ids.isEmpty ? [] :
+            client.from("entry_comments").select()
+                .in("entry_id", values: ids)
+                .order("created_at", ascending: false)
+                .limit(limit)
+                .execute().value
+
+        let (follows, reactions, comments) = try await (followRows, reactionRows, commentRows)
+
+        var items: [ActivityItem] = []
+        var actorIds = Set<UUID>()
+
+        for f in follows {
+            actorIds.insert(f.followerId)
+            items.append(.init(id: "f-\(f.followerId)", actor: .placeholder(f.followerId),
+                               kind: .followedYou, date: f.createdAt))
+        }
+        for r in reactions where r.userId != me {
+            guard let entry = mineById[r.entryId] else { continue }
+            actorIds.insert(r.userId)
+            items.append(.init(id: "r-\(r.entryId)-\(r.userId)-\(r.emoji)",
+                               actor: .placeholder(r.userId),
+                               kind: .reacted(emoji: r.emoji, entry: entry),
+                               date: r.createdAt ?? entry.createdAt))
+        }
+        for c in comments where c.authorId != me {
+            guard let entry = mineById[c.entryId] else { continue }
+            actorIds.insert(c.authorId)
+            items.append(.init(id: "c-\(c.id)", actor: .placeholder(c.authorId),
+                               kind: .commented(text: c.text, entry: entry),
+                               date: c.createdAt))
+        }
+
+        // Resolve actor profiles in one round trip.
+        let people = (try? await profiles(ids: Array(actorIds))) ?? []
+        let byId = Dictionary(uniqueKeysWithValues: people.map { ($0.id, $0) })
+        return items
+            .compactMap { item in byId[item.actor.id].map {
+                ActivityItem(id: item.id, actor: $0, kind: item.kind, date: item.date)
+            } }
+            .sorted { $0.date > $1.date }
+    }
+
+    // ── Yearly goal ──────────────────────────────────────────────────────────
+
+    func updateYearlyGoal(_ goal: Int?) async throws {
+        struct Patch: Encodable { let yearlyGoal: Int? }
+        let session = try await client.auth.session
+        try await client.from("profiles")
+            .update(Patch(yearlyGoal: goal))
+            .eq("id", value: session.user.id)
+            .execute()
+    }
+
+    // ── Auth lifecycle ───────────────────────────────────────────────────────
+
+    /// Sends the reset email; the link deep-links back into the app, which
+    /// then lets the user set a new password.
+    func requestPasswordReset(email: String) async throws {
+        try await client.auth.resetPasswordForEmail(
+            email, redirectTo: URL(string: "culinarypassport://reset-password"))
+    }
+
+    func updatePassword(_ newPassword: String) async throws {
+        try await client.auth.update(user: UserAttributes(password: newPassword))
+    }
+
+    /// App Store 5.1.1(v): permanent in-app account deletion. The edge
+    /// function wipes storage and the auth user; local session is then dead.
+    func deleteAccount() async throws {
+        try await client.functions.invoke("delete-account")
+        try? await client.auth.signOut()
+    }
+
+    // ── Minimal analytics ────────────────────────────────────────────────────
+
+    /// Fire-and-forget event logging (insert-only table; nobody reads it via
+    /// the API). Never throws into product flows.
+    func logEvent(_ name: String, props: [String: String]? = nil) {
+        Task {
+            struct Insert: Encodable {
+                let userId: UUID
+                let name: String
+                let props: [String: String]?
+            }
+            guard let session = try? await client.auth.session else { return }
+            _ = try? await client.from("events")
+                .insert(Insert(userId: session.user.id, name: name, props: props))
                 .execute()
         }
     }

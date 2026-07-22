@@ -27,6 +27,7 @@ struct GroupGlobeView: View {
     @State private var selected: String?
     @State private var viewingEntry: Entry?
     @State private var showDetails = false
+    @State private var showLeaderboard = false
     @Environment(\.dismiss) private var dismiss
 
     init(group: Group) {
@@ -95,6 +96,10 @@ struct GroupGlobeView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                Button { showLeaderboard = true } label: {
+                    Image(systemName: "trophy")
+                }
+                .accessibilityLabel("Leaderboard")
                 NavigationLink {
                     GroupFeedView(group: groupInfo)
                 } label: {
@@ -105,6 +110,13 @@ struct GroupGlobeView: View {
                 }
                 .accessibilityLabel("Group details")
             }
+        }
+        .sheet(isPresented: $showLeaderboard) {
+            GroupLeaderboardSheet(
+                members: vm.memberIds,
+                profiles: vm.paletteProfiles,
+                entriesByCountry: vm.entriesByCountry
+            )
         }
         .task { await vm.load(group: groupInfo) }
     }
@@ -250,6 +262,85 @@ final class GroupGlobeViewModel: ObservableObject {
         }
         let n = CGFloat(colors.count)
         return UIColor(red: r / n, green: g / n, blue: b / n, alpha: 1)
+    }
+}
+
+/// Friendly competition: who's eaten the most of the world. Computed from
+/// the already-loaded group entries — no extra queries.
+private struct GroupLeaderboardSheet: View {
+    let members: [UUID]
+    let profiles: [UUID: Profile]
+    let entriesByCountry: [String: [Entry]]
+
+    @Environment(\.dismiss) private var dismiss
+
+    private struct Standing: Identifiable {
+        let profile: Profile
+        let cuisines: Int
+        let meals: Int
+        let rare: Int
+        var id: UUID { profile.id }
+    }
+
+    private var standings: [Standing] {
+        var cuisines: [UUID: Set<String>] = [:]
+        var meals: [UUID: Int] = [:]
+        for (code, entries) in entriesByCountry {
+            for entry in entries {
+                cuisines[entry.userId, default: []].insert(code)
+                meals[entry.userId, default: 0] += 1
+            }
+        }
+        return members.compactMap { id -> Standing? in
+            guard let profile = profiles[id] else { return nil }
+            let codes = cuisines[id] ?? []
+            return Standing(profile: profile,
+                            cuisines: codes.count,
+                            meals: meals[id] ?? 0,
+                            rare: codes.filter { Country.rareCodes.contains($0) }.count)
+        }
+        .sorted { ($0.cuisines, $0.meals) > ($1.cuisines, $1.meals) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List(Array(standings.enumerated()), id: \.element.id) { index, standing in
+                HStack(spacing: 12) {
+                    Text(medal(index))
+                        .font(.title3)
+                        .frame(width: 30)
+                    Circle()
+                        .fill(Color(uiColor: UIColor(hex: standing.profile.color) ?? .systemGray))
+                        .frame(width: 10, height: 10)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(standing.profile.name).font(.subheadline.weight(.semibold))
+                        Text("\(standing.meals) meal\(standing.meals == 1 ? "" : "s")\(standing.rare > 0 ? " · \(standing.rare) rare ✦" : "")")
+                            .font(.caption)
+                            .foregroundStyle(Color(.secondaryLabel))
+                    }
+                    Spacer()
+                    Text("\(standing.cuisines)")
+                        .font(.title3.bold()).monospacedDigit()
+                    Text("cuisines")
+                        .font(.caption2)
+                        .foregroundStyle(Color(.secondaryLabel))
+                }
+                .padding(.vertical, 3)
+            }
+            .navigationTitle("Leaderboard")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func medal(_ index: Int) -> String {
+        switch index {
+        case 0: "🥇"
+        case 1: "🥈"
+        case 2: "🥉"
+        default: "\(index + 1)."
+        }
     }
 }
 

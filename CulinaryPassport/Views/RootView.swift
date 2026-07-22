@@ -3,6 +3,7 @@ import SwiftUI
 struct RootView: View {
     @State private var tab = RootView.initialTab
     @State private var debugScreen = RootView.debugScreenArg
+    @State private var showOnboarding = false
 
     var body: some View {
         TabView(selection: $tab) {
@@ -32,6 +33,41 @@ struct RootView: View {
             }
         }
         #endif
+        .fullScreenCover(isPresented: $showOnboarding) {
+            OnboardingView {
+                Self.markOnboarded()
+                showOnboarding = false
+            }
+        }
+        .task {
+            // First run for this account: no meals yet and never welcomed.
+            // Follows auth changes rather than running once — a stale keychain
+            // session at launch would otherwise make the check look at the
+            // previous account.
+            guard !ProcessInfo.processInfo.arguments.contains("-uiPreview"),
+                  !ProcessInfo.processInfo.arguments.contains("-skipOnboarding") else { return }
+            for await state in SupabaseService.shared.client.auth.authStateChanges
+            where state.session != nil {
+                guard !Self.hasOnboarded() else { break }
+                let mine = (try? await SupabaseService.shared.myEntries()) ?? []
+                if mine.isEmpty {
+                    showOnboarding = true
+                    break
+                }
+            }
+        }
+    }
+
+    private static func onboardKey() -> String {
+        "hasOnboarded" // per-device is fine; the entries check handles per-account
+    }
+
+    static func hasOnboarded() -> Bool {
+        UserDefaults.standard.bool(forKey: onboardKey())
+    }
+
+    static func markOnboarded() {
+        UserDefaults.standard.set(true, forKey: onboardKey())
     }
 
     /// Headless test hook: `-tab journal` opens on that tab.

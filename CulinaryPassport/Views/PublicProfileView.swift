@@ -13,6 +13,9 @@ struct PublicProfileView: View {
     @State private var viewing: Entry?
     @State private var busy = false
     @State private var loaded = false
+    @State private var reporting = false
+    @State private var reportReason = ""
+    @State private var isBlocked = false
 
     var body: some View {
         ScrollView {
@@ -90,6 +93,47 @@ struct PublicProfileView: View {
         }
         .navigationTitle(profile.username.map { "@\($0)" } ?? profile.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button(role: .destructive) { reporting = true } label: {
+                        Label("Report profile", systemImage: "flag")
+                    }
+                    Button(role: .destructive) {
+                        Task {
+                            try? await SupabaseService.shared.setBlocked(profile.id, true)
+                            isBlocked = true
+                        }
+                    } label: {
+                        Label("Block \(profile.name)", systemImage: "hand.raised")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
+        .alert("Report this profile", isPresented: $reporting) {
+            TextField("What's wrong?", text: $reportReason)
+            Button("Cancel", role: .cancel) { reportReason = "" }
+            Button("Report", role: .destructive) {
+                Task {
+                    try? await SupabaseService.shared.report(
+                        contentType: "profile", contentId: profile.id,
+                        reason: reportReason.isEmpty ? "inappropriate" : reportReason)
+                    reportReason = ""
+                }
+            }
+        }
+        .overlay {
+            if isBlocked {
+                ContentUnavailableView(
+                    "\(profile.name) is blocked",
+                    systemImage: "hand.raised",
+                    description: Text("They no longer appear in your feeds or search.")
+                )
+                .background(Color(.systemBackground))
+            }
+        }
         .task { await load() }
     }
 

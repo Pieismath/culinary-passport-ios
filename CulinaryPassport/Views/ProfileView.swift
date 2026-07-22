@@ -13,6 +13,9 @@ struct ProfileView: View {
     @State private var showEdit = false
     @State private var sheet: ProfileSheet?
     @State private var cropping: PickedImage?
+    @State private var editingGoal = false
+    @State private var confirmDeleteAccount = false
+    @State private var deletingAccount = false
     @State private var entries: [Entry] = []
 
     /// Wrapper so `.sheet(item:)` can carry the picked photo into the cropper.
@@ -34,8 +37,10 @@ struct ProfileView: View {
                 VStack(spacing: 14) {
                     header
                     worldCard
+                    goalCard
                     insightCards
                     actionRows
+                    accountRows
                     signOut
                 }
                 .padding(.horizontal)
@@ -58,6 +63,12 @@ struct ProfileView: View {
             .sheet(item: $cropping) { picked in
                 PhotoCropSheet(image: picked.image) { jpeg in
                     Task { await upload(jpeg) }
+                }
+            }
+            .sheet(isPresented: $editingGoal) {
+                GoalEditorSheet(current: profile?.yearlyGoal) { newGoal in
+                    profile?.yearlyGoal = newGoal
+                    Task { try? await SupabaseService.shared.updateYearlyGoal(newGoal) }
                 }
             }
             .sheet(isPresented: $showEdit) {
@@ -185,7 +196,7 @@ struct ProfileView: View {
             }
             .frame(height: 8)
 
-            Text("\(insights.countries) of \(CountryStore.all.count) cuisines · \(insights.meals) meals · \(insights.continents) of 6 continents")
+            Text("\(insights.countries) of \(CountryStore.all.count) cuisines · \(insights.meals) meals · \(insights.continents) of \(Insights.totalContinents) continents")
                 .font(.caption)
                 .foregroundStyle(Color(.secondaryLabel))
         }
@@ -193,6 +204,78 @@ struct ProfileView: View {
         .frame(maxWidth: .infinity)
         .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
         .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
+    }
+
+    // ── Yearly goal (Beli's "how many this year?") ───────────────────────────
+
+    private var newCuisinesThisYear: Int {
+        let year = String(Calendar.current.component(.year, from: Date()))
+        var earliest: [String: String] = [:]
+        for e in entries {
+            if let current = earliest[e.countryCode] {
+                if e.dateTried < current { earliest[e.countryCode] = e.dateTried }
+            } else {
+                earliest[e.countryCode] = e.dateTried
+            }
+        }
+        return earliest.values.filter { $0.hasPrefix(year) }.count
+    }
+
+    @ViewBuilder private var goalCard: some View {
+        let year = Calendar.current.component(.year, from: Date())
+        let progress = newCuisinesThisYear
+        if let goal = profile?.yearlyGoal {
+            Button { editingGoal = true } label: {
+                HStack(spacing: 14) {
+                    ZStack {
+                        Circle().stroke(Color(.systemGray5), lineWidth: 7)
+                        Circle()
+                            .trim(from: 0, to: min(1, Double(progress) / Double(max(1, goal))))
+                            .stroke(LinearGradient(colors: [.green, .teal],
+                                                   startPoint: .top, endPoint: .bottom),
+                                    style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                        Text("\(progress)").font(.headline).monospacedDigit()
+                    }
+                    .frame(width: 52, height: 52)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(String(year)) goal: \(goal) new cuisines")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text(progress >= goal
+                             ? "Done! Raise the bar?"
+                             : "\(goal - progress) to go — tap to adjust")
+                            .font(.caption)
+                            .foregroundStyle(Color(.secondaryLabel))
+                    }
+                    Spacer()
+                }
+                .padding(14)
+                .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
+                .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
+            }
+            .buttonStyle(.plain)
+        } else {
+            Button { editingGoal = true } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Set your \(String(year)) goal")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("You've tried \(progress) new cuisine\(progress == 1 ? "" : "s") this year. How many by December?")
+                            .font(.caption)
+                            .foregroundStyle(Color(.secondaryLabel))
+                    }
+                    Spacer()
+                    Text("🏆").font(.title)
+                }
+                .padding(14)
+                .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
+                .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     // ── The two facts people actually want to see ────────────────────────────
@@ -234,6 +317,42 @@ struct ProfileView: View {
         }
         .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
         .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
+    }
+
+    /// Legal + irreversible account actions, tucked at the bottom.
+    private var accountRows: some View {
+        VStack(spacing: 0) {
+            NavigationLink {
+                LegalView()
+            } label: {
+                ActionRow(icon: "doc.text", tint: .gray, title: "Terms & privacy")
+            }
+            .buttonStyle(.plain)
+
+            Divider().padding(.leading, 56)
+
+            Button {
+                confirmDeleteAccount = true
+            } label: {
+                ActionRow(icon: "trash", tint: .red, title: deletingAccount ? "Deleting…" : "Delete account")
+            }
+            .buttonStyle(.plain)
+            .disabled(deletingAccount)
+        }
+        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 18))
+        .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
+        .confirmationDialog("Delete your account?", isPresented: $confirmDeleteAccount,
+                            titleVisibility: .visible) {
+            Button("Delete everything", role: .destructive) {
+                Task {
+                    deletingAccount = true
+                    try? await SupabaseService.shared.deleteAccount()
+                    deletingAccount = false
+                }
+            }
+        } message: {
+            Text("Permanent. Your meals, photos, groups you own, and profile all go. There's no undo.")
+        }
     }
 
     private var signOut: some View {
@@ -298,6 +417,10 @@ struct ProfileView: View {
 struct Insights {
     struct Cuisine { let code: String; let flag: String; let name: String; let count: Int; let avgRating: Double }
 
+    /// Derived from the shipped data, not hardcoded — Natural Earth's
+    /// continent labels are what the "x of y" denominator must match.
+    static let totalContinents = Set(CountryStore.all.map(\.continent).filter { !$0.isEmpty }).count
+
     var meals = 0
     var countries = 0
     var continents = 0
@@ -351,6 +474,73 @@ struct Insights {
             second = ("Best rated", best,
                       "★\(String(format: "%.1f", best.avgRating)) across \(best.count) meal\(best.count == 1 ? "" : "s")")
         }
+    }
+}
+
+/// Quick goal picker: the Beli pattern (a few sensible presets + custom).
+struct GoalEditorSheet: View {
+    let current: Int?
+    let onSave: (Int?) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var custom = ""
+
+    private let presets = [6, 12, 24]
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 18) {
+                Text("How many NEW cuisines this year?")
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+
+                HStack(spacing: 10) {
+                    ForEach(presets, id: \.self) { preset in
+                        Button {
+                            onSave(preset)
+                            dismiss()
+                        } label: {
+                            Text("\(preset)")
+                                .font(.title3.bold())
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(current == preset ? Color.accentColor.opacity(0.18)
+                                                              : Color(.systemGray6),
+                                            in: RoundedRectangle(cornerRadius: 14))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                HStack {
+                    TextField("Custom", text: $custom)
+                        .keyboardType(.numberPad)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 110)
+                    Button("Set") {
+                        if let value = Int(custom), (1...1000).contains(value) {
+                            onSave(value)
+                            dismiss()
+                        }
+                    }
+                    .disabled(Int(custom).map { !(1...1000).contains($0) } ?? true)
+                }
+
+                if current != nil {
+                    Button("Remove goal", role: .destructive) {
+                        onSave(nil)
+                        dismiss()
+                    }
+                    .font(.footnote)
+                }
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("Yearly goal")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+        }
+        .presentationDetents([.medium])
     }
 }
 

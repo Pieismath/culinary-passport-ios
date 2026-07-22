@@ -8,16 +8,40 @@ struct CuisineSuggestionsView: View {
 
     @State private var picks: [RestaurantRecommender.Pick] = []
     @State private var cuisines: [Recommender.Suggestion] = []
+    @State private var saved: [SavedRestaurant] = []
     @State private var logCountry: Country?
     @State private var logRestaurant: RestaurantRecommender.Pick?
     @State private var loading = true
 
+    private var savedKeys: Set<String> {
+        Set(saved.map { "\($0.restaurantName.lowercased())|\($0.countryCode)" })
+    }
+
     var body: some View {
         List {
+            if !saved.isEmpty {
+                Section("Saved for later") {
+                    ForEach(saved) { place in
+                        SavedRow(place: place) {
+                            logCountry = CountryStore.byCode[place.countryCode]
+                        } onRemove: {
+                            Task {
+                                try? await SupabaseService.shared.unsaveRestaurant(id: place.id)
+                                saved.removeAll { $0.id == place.id }
+                            }
+                        }
+                    }
+                }
+            }
             if !picks.isEmpty {
                 Section {
                     ForEach(picks) { pick in
-                        RestaurantRow(pick: pick) { logRestaurant = pick }
+                        RestaurantRow(
+                            pick: pick,
+                            isSaved: savedKeys.contains("\(pick.restaurant.lowercased())|\(pick.country.code)"),
+                            onLog: { logRestaurant = pick },
+                            onSave: { Task { await save(pick) } }
+                        )
                     }
                 } header: {
                     Text("Places your people loved")
@@ -62,6 +86,7 @@ struct CuisineSuggestionsView: View {
 
     private func load() async {
         cuisines = Recommender.suggestions(entries: entries)
+        saved = (try? await SupabaseService.shared.savedRestaurants()) ?? []
         if let social = try? await SupabaseService.shared.entriesFromMyPeople() {
             picks = RestaurantRecommender.picks(mine: entries,
                                                 theirs: social.entries,
@@ -69,11 +94,47 @@ struct CuisineSuggestionsView: View {
         }
         loading = false
     }
+
+    private func save(_ pick: RestaurantRecommender.Pick) async {
+        try? await SupabaseService.shared.saveRestaurant(
+            name: pick.restaurant, city: pick.city,
+            countryCode: pick.country.code, note: pick.reason
+        )
+        saved = (try? await SupabaseService.shared.savedRestaurants()) ?? saved
+    }
+}
+
+private struct SavedRow: View {
+    let place: SavedRestaurant
+    let onLog: () -> Void
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(CountryStore.byCode[place.countryCode]?.flagEmoji ?? "🌍").font(.title2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(place.restaurantName).font(.subheadline.weight(.medium))
+                if let note = place.note, !note.isEmpty {
+                    Text(note).font(.caption).foregroundStyle(Color(.secondaryLabel)).lineLimit(1)
+                }
+            }
+            Spacer()
+            Button(action: onLog) {
+                BrandedIcon(name: "action-add", size: 22)
+            }
+            .buttonStyle(.plain)
+        }
+        .swipeActions {
+            Button(role: .destructive, action: onRemove) { Label("Remove", systemImage: "bookmark.slash") }
+        }
+    }
 }
 
 private struct RestaurantRow: View {
     let pick: RestaurantRecommender.Pick
+    let isSaved: Bool
     let onLog: () -> Void
+    let onSave: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -101,11 +162,21 @@ private struct RestaurantRow: View {
                 }
             }
             Spacer(minLength: 4)
-            Button(action: onLog) {
-                BrandedIcon(name: "action-add", size: 24)
+            VStack(spacing: 10) {
+                Button(action: onLog) {
+                    BrandedIcon(name: "action-add", size: 24)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Log a meal at \(pick.restaurant)")
+                Button(action: onSave) {
+                    Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
+                        .foregroundStyle(isSaved ? Color(uiColor: GlobeViewModel.queueAmber)
+                                                 : Color(.tertiaryLabel))
+                }
+                .buttonStyle(.plain)
+                .disabled(isSaved)
+                .accessibilityLabel("Save for later")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Log a meal at \(pick.restaurant)")
         }
         .padding(.vertical, 3)
     }

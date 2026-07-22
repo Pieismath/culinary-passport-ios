@@ -9,7 +9,9 @@ struct SignInView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var error: String?
+    @State private var notice: String?
     @State private var showEmail = false
+    @State private var showLegal = false
     @State private var busy = false
     @State private var appleRawNonce = ""
 
@@ -73,19 +75,35 @@ struct SignInView: View {
                         Button("Create account") { Task { await emailSignIn(create: true) } }
                             .buttonStyle(.bordered)
                     }
+                    Button("Forgot password?") { Task { await forgotPassword() } }
+                        .font(.footnote)
+                        .disabled(email.isEmpty)
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
             if let error { Text(error).font(.caption).foregroundStyle(.red).multilineTextAlignment(.center) }
+            if let notice { Text(notice).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center) }
 
             #if DEBUG
             Button("UI preview (no backend)") { session.uiPreview = true }
                 .font(.caption).foregroundStyle(.secondary).padding(.top, 8)
             #endif
             Spacer()
+
+            HStack(spacing: 4) {
+                Text("By continuing you agree to the")
+                Button("terms & privacy policy") { showLegal = true }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .font(.caption2)
+            .foregroundStyle(Color(.tertiaryLabel))
         }
         .padding(32)
+        .sheet(isPresented: $showLegal) {
+            NavigationStack { LegalView() }
+        }
     }
 
     // MARK: Actions
@@ -115,6 +133,14 @@ struct SignInView: View {
                 error = err.localizedDescription
             }
         }
+    }
+
+    private func forgotPassword() async {
+        do {
+            try await SupabaseService.shared.requestPasswordReset(email: email)
+            notice = "Reset link sent — check \(email). Opening it brings you back here to set a new password."
+            error = nil
+        } catch { self.error = error.localizedDescription }
     }
 
     private func emailSignIn(create: Bool) async {

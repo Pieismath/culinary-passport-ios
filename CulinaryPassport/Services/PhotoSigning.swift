@@ -16,6 +16,11 @@ actor PhotoURLCache {
     func url(for path: String) async -> URL? {
         // refresh with 5 minutes still on the clock so a URL never dies mid-render
         if let hit = cache[path], hit.expires.timeIntervalSinceNow > 300 { return hit.url }
+        // unbounded growth guard: drop dead entries, then oldest if still fat
+        if cache.count > 400 {
+            cache = cache.filter { $0.value.expires > Date() }
+            if cache.count > 400 { cache.removeAll() }
+        }
         if let pending = inFlight[path] { return await pending.value }
         let task = Task<URL?, Never> {
             try? await SupabaseService.shared.client.storage.from("photos")

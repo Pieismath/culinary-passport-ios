@@ -73,6 +73,7 @@ struct GroupsView: View {
                         autocapitalize: true
                     ) { name in
                         _ = try await SupabaseService.shared.createGroup(name: name)
+                        SupabaseService.shared.logEvent("group_created")
                         await reload()
                     }
                 case .join:
@@ -100,8 +101,14 @@ struct GroupsView: View {
     }
 
     private func reload() async {
+        let uid = try? await SupabaseService.shared.client.auth.session.user.id
+        if groups.isEmpty,
+           let cached = DiskCache.load("groups", user: uid, as: [Group].self) {
+            groups = cached
+        }
         do {
             groups = try await SupabaseService.shared.myGroups()
+            DiskCache.save(groups, key: "groups", user: uid)
             let memberships = try await SupabaseService.shared.groupMembers(groupIds: groups.map(\.id))
             membersByGroup = Dictionary(grouping: memberships, by: \.groupId)
                 .mapValues { $0.map(\.userId) }

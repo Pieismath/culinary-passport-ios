@@ -43,9 +43,11 @@ struct GlobeSceneView: View {
                     tasters: vm.tasterNames(for: code),
                     entries: vm.entriesByCountry[code] ?? [],
                     authors: vm.usersById,
+                    wishlisted: vm.wishlisted.contains(code),
                     onClose: { selectedCode = nil },
                     onLog: { logCountry = country },
                     onFindNearby: { findNearby(country) },
+                    onToggleWishlist: { vm.toggleWishlist(code) },
                     onSelectEntry: { viewingEntry = $0 }
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -102,7 +104,11 @@ struct GlobeSceneView: View {
                 .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showSearch) {
-            CountrySearchSheet(tried: Set(vm.statusByCountry.keys)) { country in
+            CountrySearchSheet(
+                tried: Set(vm.statusByCountry.keys),
+                wishlisted: vm.wishlisted,
+                onToggleWishlist: { vm.toggleWishlist($0) }
+            ) { country in
                 flyTo(code: country.code)
             }
         }
@@ -125,8 +131,18 @@ struct GlobeSceneView: View {
     // ── Spin ─────────────────────────────────────────────────────────────────
 
     private var spinButton: some View {
-        Button {
-            spinGlobe()
+        Menu {
+            Button {
+                spinGlobe()
+            } label: {
+                Label("Spin anywhere new", systemImage: "globe")
+            }
+            Button {
+                spinGlobe(pool: .wishlist)
+            } label: {
+                Label("Spin my Want to Try", systemImage: "bookmark")
+            }
+            .disabled(vm.wishlisted.isEmpty)
         } label: {
             Image("action-spin")
                 .resizable()
@@ -137,10 +153,14 @@ struct GlobeSceneView: View {
                 .padding(14)
                 .background(.regularMaterial, in: Circle())
                 .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+        } primaryAction: {
+            spinGlobe()
         }
         .disabled(focusing)
         .accessibilityLabel("Spin for tonight's cuisine")
     }
+
+    enum SpinPool { case untried, wishlist }
 
     private var searchButton: some View {
         Button {
@@ -159,12 +179,19 @@ struct GlobeSceneView: View {
         .accessibilityLabel("Find a country or cuisine")
     }
 
-    /// Land on a random cuisine you haven't tried (anywhere, once you've tried
-    /// them all). The globe physically spins there — no flag slot machine.
-    private func spinGlobe() {
+    /// Land on a random cuisine — anywhere new, or restricted to the user's
+    /// Want to Try queue. The globe physically spins there.
+    private func spinGlobe(pool: SpinPool = .untried) {
         let withGeometry = CountryStore.all.filter { CountryGeometry.rings[$0.code] != nil }
-        let untried = withGeometry.filter { vm.statusByCountry[$0.code] == nil }
-        guard let pick = (untried.isEmpty ? withGeometry : untried).randomElement() else { return }
+        let candidates: [Country]
+        switch pool {
+        case .wishlist:
+            candidates = withGeometry.filter { vm.wishlisted.contains($0.code) }
+        case .untried:
+            let untried = withGeometry.filter { vm.statusByCountry[$0.code] == nil }
+            candidates = untried.isEmpty ? withGeometry : untried
+        }
+        guard let pick = candidates.randomElement() else { return }
         selectedCode = nil
         focusing = true
         focusTarget = .init(id: UUID(), code: pick.code, style: .spin)
@@ -288,9 +315,11 @@ private struct CountryPanel: View {
     let tasters: [String]
     let entries: [Entry]
     let authors: [UUID: Profile]
+    let wishlisted: Bool
     let onClose: () -> Void
     let onLog: () -> Void
     let onFindNearby: () -> Void
+    let onToggleWishlist: () -> Void
     let onSelectEntry: (Entry) -> Void
 
     var body: some View {
@@ -313,6 +342,12 @@ private struct CountryPanel: View {
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(Color(.systemGray5), in: Capsule())
+                }
+                // Want to Try — the bookmark survives even after you've eaten
+                // there (maybe you want to go back properly).
+                Button(action: onToggleWishlist) {
+                    Image(systemName: wishlisted ? "bookmark.fill" : "bookmark")
+                        .foregroundStyle(wishlisted ? Color(uiColor: GlobeViewModel.queueAmber) : Color(.secondaryLabel))
                 }
                 Button { onClose() } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)

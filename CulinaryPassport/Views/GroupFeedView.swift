@@ -21,6 +21,8 @@ struct GroupFeedView: View {
     @State private var reactingTo: GroupPost?
     /// Meal opened from a message's linked card.
     @State private var viewingEntry: Entry?
+    @State private var canLoadEarlier = false
+    @State private var loadingEarlier = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -31,6 +33,18 @@ struct GroupFeedView: View {
                         systemImage: "bubble.left.and.bubble.right",
                         description: Text("Meals you log also drop into the chat for everyone to see.")
                     )
+                    .listRowSeparator(.hidden)
+                }
+                if canLoadEarlier {
+                    Button {
+                        Task { await loadEarlier() }
+                    } label: {
+                        Text(loadingEarlier ? "Loading…" : "Load earlier messages")
+                            .font(.caption)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color(.secondaryLabel))
                     .listRowSeparator(.hidden)
                 }
                 // Chat order: oldest at the top, newest by the composer.
@@ -63,11 +77,15 @@ struct GroupFeedView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                NavigationLink {
-                    SyncedMealsView(group: group)
+                // SyncedMealsView folded in here: proposing tonight's cuisine
+                // IS a chat message, and shared cuisines live on the group
+                // globe's consensus lens.
+                Button {
+                    Task { await proposeTonight() }
                 } label: {
                     BrandedIcon(name: "feature-sync", size: 22)
                 }
+                .accessibilityLabel("Propose tonight's cuisine")
             }
         }
         .task { await reload() }
@@ -134,6 +152,7 @@ struct GroupFeedView: View {
             }
             composerText = ""
             replyTo = nil
+            SupabaseService.shared.logEvent("chat_sent")
             await reload()
         } catch { self.error = error.localizedDescription }
     }
@@ -175,11 +194,27 @@ struct GroupFeedView: View {
         }
     }
 
+    /// Page one more screen of history onto the top of the chat.
+    private func loadEarlier() async {
+        guard let oldest = posts.last, !loadingEarlier else { return }
+        loadingEarlier = true
+        defer { loadingEarlier = false }
+        let older = (try? await SupabaseService.shared.feedPosts(
+            groupId: group.id, before: oldest.createdAt)) ?? []
+        posts.append(contentsOf: older)
+        canLoadEarlier = older.count >= 50
+        let comments = (try? await SupabaseService.shared.comments(postIds: older.map(\.id))) ?? []
+        commentsByPost.merge(Dictionary(grouping: comments, by: \.postId)) { a, b in a + b }
+        let reactions = (try? await SupabaseService.shared.reactions(postIds: older.map(\.id))) ?? []
+        reactionsByPost.merge(Dictionary(grouping: reactions, by: \.postId)) { a, b in a + b }
+    }
+
     @MainActor
     private func reload() async {
         do {
             myId = try? await SupabaseService.shared.client.auth.session.user.id
             posts = try await SupabaseService.shared.feedPosts(groupId: group.id)
+            canLoadEarlier = posts.count >= 50
             let allComments = try await SupabaseService.shared.comments(postIds: posts.map(\.id))
             commentsByPost = Dictionary(grouping: allComments, by: \.postId)
 
@@ -201,6 +236,17 @@ struct GroupFeedView: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    /// Pick a cuisine nobody's synced on yet and drop it into the chat.
+    private func proposeTonight() async {
+        let candidate = CountryStore.all.randomElement()
+        guard let candidate else { return }
+        try? await SupabaseService.shared.createPost(
+            groupId: group.id,
+            text: "Let's all try \(candidate.flagEmoji) \(candidate.cuisineName) tonight 💕"
+        )
+        await reload()
     }
 
     private func react(post: GroupPost, emoji: String, on: Bool) async {

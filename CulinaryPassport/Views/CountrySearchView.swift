@@ -7,6 +7,9 @@ import SwiftUI
 struct CountrySearchSheet: View {
     /// Country codes the user has already logged.
     let tried: Set<String>
+    /// Codes on the Want to Try list (bookmark toggles live in the rows).
+    let wishlisted: Set<String>
+    let onToggleWishlist: (String) -> Void
     /// Called after dismiss with the picked country (parent flies the globe there).
     let onPick: (Country) -> Void
 
@@ -78,6 +81,16 @@ struct CountrySearchSheet: View {
                     .foregroundStyle(.green)
                     .accessibilityLabel("Already tried")
             }
+            Button {
+                onToggleWishlist(country.code)
+            } label: {
+                Image(systemName: wishlisted.contains(country.code) ? "bookmark.fill" : "bookmark")
+                    .foregroundStyle(wishlisted.contains(country.code)
+                                     ? Color(uiColor: GlobeViewModel.queueAmber)
+                                     : Color(.tertiaryLabel))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Want to try")
         }
     }
 }

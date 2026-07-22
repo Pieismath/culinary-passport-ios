@@ -24,6 +24,30 @@ struct PlacesService {
         let city: String?
         let lat: Double?
         let lng: Double?
+        /// ISO 3166-1 alpha-2 from the address — where the restaurant IS
+        /// (not its cuisine).
+        let countryCode: String?
+        /// Google place types ("thai_restaurant", "ramen_restaurant" …).
+        let types: [String]
+    }
+
+    /// Google cuisine-flavored place types → passport country. The address
+    /// country would be wrong (a Thai place in Sydney is still Thai food).
+    static func cuisineCountry(fromTypes types: [String]) -> String? {
+        let map: [String: String] = [
+            "thai_restaurant": "TH", "japanese_restaurant": "JP", "ramen_restaurant": "JP",
+            "sushi_restaurant": "JP", "chinese_restaurant": "CN", "korean_restaurant": "KR",
+            "vietnamese_restaurant": "VN", "indian_restaurant": "IN", "indonesian_restaurant": "ID",
+            "italian_restaurant": "IT", "pizza_restaurant": "IT", "french_restaurant": "FR",
+            "greek_restaurant": "GR", "spanish_restaurant": "ES", "mexican_restaurant": "MX",
+            "lebanese_restaurant": "LB", "turkish_restaurant": "TR", "brazilian_restaurant": "BR",
+            "american_restaurant": "US", "middle_eastern_restaurant": "LB",
+            "mediterranean_restaurant": "GR", "afghani_restaurant": "AF",
+        ]
+        for type in types {
+            if let code = map[type] { return code }
+        }
+        return nil
     }
 
     func autocomplete(_ input: String, near bias: (lat: Double, lng: Double)?) async throws -> [Suggestion] {
@@ -52,15 +76,21 @@ struct PlacesService {
             "places-proxy", options: .init(body: req), decoder: decoder
         )
         // "locality" is the city; fall back to the next-broadest admin area.
-        let city = resp.addressComponents?.first { $0.types.contains("locality") }?.longText
-            ?? resp.addressComponents?.first { $0.types.contains("postal_town") }?.longText
-            ?? resp.addressComponents?.first { $0.types.contains("administrative_area_level_2") }?.longText
+        let comps = resp.addressComponents ?? []
+        func component(_ type: String) -> AddressComponent? {
+            comps.first { ($0.types ?? []).contains(type) }
+        }
+        let city = component("locality")?.longText
+            ?? component("postal_town")?.longText
+            ?? component("administrative_area_level_2")?.longText
         return Details(
             name: resp.displayName?.text ?? "",
             address: resp.formattedAddress ?? "",
             city: city,
             lat: resp.location?.latitude,
-            lng: resp.location?.longitude
+            lng: resp.location?.longitude,
+            countryCode: component("country")?.shortText,
+            types: (resp.types ?? []) + (resp.primaryType.map { [$0] } ?? [])
         )
     }
 
@@ -99,10 +129,15 @@ struct PlacesService {
         let location: LocationWire?
         let displayName: TextWire?
         let addressComponents: [AddressComponent]?
+        let types: [String]?
+        let primaryType: String?
     }
     private struct LocationWire: Decodable { let latitude: Double; let longitude: Double }
+    // Every field is optional on the wire — Google omits `types` (and
+    // sometimes shortText) on some components, e.g. a bare building name.
     private struct AddressComponent: Decodable {
-        let longText: String
-        let types: [String]
+        let longText: String?
+        let shortText: String?
+        let types: [String]?
     }
 }

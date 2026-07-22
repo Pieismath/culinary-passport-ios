@@ -10,6 +10,7 @@ struct EntriesView: View {
     @State private var entries: [Entry] = []
     @State private var mode: Mode = EntriesView.initialMode
     @State private var showAdd = false
+    @State private var showQuick = false
     @State private var viewing: Entry?
     @State private var error: String?
 
@@ -35,13 +36,25 @@ struct EntriesView: View {
                         .pickerStyle(.segmented)
                     }
                     ToolbarItem(placement: .primaryAction) {
-                        Button { showAdd = true } label: {
+                        Menu {
+                            Button { showQuick = true } label: {
+                                Label("Quick log", systemImage: "bolt")
+                            }
+                            Button { showAdd = true } label: {
+                                Label("Log with details", systemImage: "square.and.pencil")
+                            }
+                        } label: {
                             BrandedIcon(name: "action-add", size: 22)
+                        } primaryAction: {
+                            showQuick = true
                         }
                     }
                 }
                 .sheet(isPresented: $showAdd) {
                     EntrySheet(mode: .add) { await reload() }
+                }
+                .sheet(isPresented: $showQuick) {
+                    QuickLogView { await reload() }
                 }
                 .sheet(item: $viewing) { entry in
                     EntryDetailView(entry: entry) { await reload() }
@@ -64,8 +77,15 @@ struct EntriesView: View {
     }
 
     private func reload() async {
-        do { entries = try await SupabaseService.shared.myEntries() }
-        catch { self.error = error.localizedDescription }
+        let uid = try? await SupabaseService.shared.client.auth.session.user.id
+        if entries.isEmpty,
+           let cached = DiskCache.load("journal", user: uid, as: [Entry].self) {
+            entries = cached
+        }
+        do {
+            entries = try await SupabaseService.shared.myEntries()
+            DiskCache.save(entries, key: "journal", user: uid)
+        } catch { self.error = error.localizedDescription }
     }
 }
 
@@ -105,6 +125,13 @@ struct EntrySheet: View {
 
     // Photos: existing stored paths (edit) + newly picked images pending upload.
     @State private var existingPhotos: [String] = []
+    @State private var stamp: StampInfo?
+
+    struct StampInfo: Identifiable {
+        let country: Country
+        let number: Int
+        var id: String { country.code }
+    }
     @State private var pickedItems: [PhotosPickerItem] = []
     @State private var newPhotos: [PickedPhoto] = []
 
@@ -180,6 +207,12 @@ struct EntrySheet: View {
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }
             }
             .navigationTitle(isEdit ? "Edit meal" : "Log a meal")
+            .fullScreenCover(item: $stamp) { info in
+                StampMomentView(country: info.country, cuisineNumber: info.number) {
+                    stamp = nil
+                    dismiss()
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -283,6 +316,10 @@ struct EntrySheet: View {
             let photos = try await uploadPhotos()
             switch mode {
             case .add:
+                // Before the insert: is this the first-ever meal from this
+                // cuisine? That's a stamp moment.
+                let priorCodes = Set(((try? await SupabaseService.shared.myEntries()) ?? [])
+                    .map(\.countryCode))
                 let session = try await SupabaseService.shared.client.auth.session
                 try await SupabaseService.shared.addEntry(NewEntry(
                     userId: session.user.id,
@@ -300,6 +337,12 @@ struct EntrySheet: View {
                     photos: photos,
                     visibility: visibility.rawValue
                 ))
+                SupabaseService.shared.logEvent("meal_logged", props: ["country": country.code])
+                if !priorCodes.contains(country.code) {
+                    stamp = StampInfo(country: country, number: priorCodes.count + 1)
+                    await onSave()
+                    return // the stamp cover owns dismissal now
+                }
             case .edit(let entry):
                 try await SupabaseService.shared.updateEntry(id: entry.id, EntryUpdate(
                     countryCode: country.code,
@@ -316,6 +359,13 @@ struct EntrySheet: View {
                     photos: photos,
                     visibility: visibility.rawValue
                 ))
+                // Photos removed during the edit are gone from the entry row;
+                // clean their storage objects too (best-effort).
+                let dropped = Set(entry.photos).subtracting(photos)
+                if !dropped.isEmpty {
+                    _ = try? await SupabaseService.shared.client.storage
+                        .from("photos").remove(paths: Array(dropped))
+                }
             }
             await onSave()
             dismiss()

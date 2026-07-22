@@ -5,14 +5,30 @@ struct CulinaryPassportApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var session = SessionStore()
 
+    @State private var showPasswordReset = false
+
     var body: some Scene {
         WindowGroup {
-            if session.isSignedIn || session.uiPreview {
-                RootView()
-                    .environment(session)
-            } else {
-                SignInView()
-                    .environment(session)
+            SwiftUI.Group {
+                if session.isSignedIn || session.uiPreview {
+                    RootView()
+                        .environment(session)
+                } else {
+                    SignInView()
+                        .environment(session)
+                }
+            }
+            // The password-reset email links back here; the SDK turns the URL
+            // into a recovery session, after which the user sets a new password.
+            .onOpenURL { url in
+                Task {
+                    if (try? await SupabaseService.shared.client.auth.session(from: url)) != nil {
+                        showPasswordReset = true
+                    }
+                }
+            }
+            .sheet(isPresented: $showPasswordReset) {
+                NewPasswordSheet()
             }
         }
     }
@@ -46,6 +62,8 @@ final class SessionStore {
         // -noPush: headless test runs can't tap the OS permission dialog
         let skipPush = ProcessInfo.processInfo.arguments.contains("-noPush")
         for await state in SupabaseService.shared.client.auth.authStateChanges {
+            if state.event == .signedOut { DiskCache.clear() }
+            if state.event == .signedIn { SupabaseService.shared.logEvent("app_open") }
             isSignedIn = state.session != nil
             // .initialSession can now carry an expired session (offline
             // relaunch): still show the app — autoRefresh will replace it
@@ -58,3 +76,45 @@ final class SessionStore {
 }
 
 // SignInView moved to Views/SignInView.swift (social-first sign-in).
+
+/// Shown after a password-reset deep link lands (recovery session active).
+struct NewPasswordSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var password = ""
+    @State private var confirm = ""
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    SecureField("New password", text: $password)
+                        .textContentType(.newPassword)
+                    SecureField("Repeat it", text: $confirm)
+                } footer: {
+                    Text("At least 8 characters.")
+                }
+                if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            }
+            .navigationTitle("Set a new password")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(busy ? "Saving…" : "Save") { Task { await save() } }
+                        .disabled(password.count < 8 || password != confirm || busy)
+                }
+            }
+        }
+        .interactiveDismissDisabled()
+    }
+
+    private func save() async {
+        busy = true
+        defer { busy = false }
+        do {
+            try await SupabaseService.shared.updatePassword(password)
+            dismiss()
+        } catch { self.error = error.localizedDescription }
+    }
+}

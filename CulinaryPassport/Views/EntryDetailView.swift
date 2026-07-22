@@ -15,6 +15,14 @@ struct EntryDetailView: View {
     @State private var editing = false
     @State private var confirmDelete = false
     @State private var deleting = false
+    @State private var reactions: [EntryReaction] = []
+    @State private var comments: [EntryComment] = []
+    @State private var commentAuthors: [UUID: Profile] = [:]
+    @State private var draft = ""
+    @State private var pickingEmoji = false
+    @State private var reporting = false
+    @State private var reportReason = ""
+    @State private var status: String?
 
     private var country: Country? { CountryStore.byCode[entry.countryCode] }
     private var isMine: Bool { myId == entry.userId }
@@ -48,6 +56,8 @@ struct EntryDetailView: View {
                     }
 
                     footerBadges
+                    reactionsRow
+                    commentsSection
                 }
                 .padding()
             }
@@ -61,6 +71,47 @@ struct EntryDetailView: View {
                     ToolbarItem(placement: .primaryAction) {
                         Button("Edit") { editing = true }
                     }
+                } else {
+                    // UGC moderation entry points (App Store 1.2).
+                    ToolbarItem(placement: .primaryAction) {
+                        Menu {
+                            Button(role: .destructive) { reporting = true } label: {
+                                Label("Report this meal", systemImage: "flag")
+                            }
+                            if let author {
+                                Button(role: .destructive) {
+                                    Task {
+                                        try? await SupabaseService.shared.setBlocked(author.id, true)
+                                        status = "\(author.name) blocked. They disappear from your feeds."
+                                    }
+                                } label: {
+                                    Label("Block \(author.name)", systemImage: "hand.raised")
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                    }
+                }
+            }
+            .alert("Report this meal", isPresented: $reporting) {
+                TextField("What's wrong?", text: $reportReason)
+                Button("Cancel", role: .cancel) { reportReason = "" }
+                Button("Report", role: .destructive) {
+                    Task {
+                        try? await SupabaseService.shared.report(
+                            contentType: "entry", contentId: entry.id,
+                            reason: reportReason.isEmpty ? "inappropriate" : reportReason)
+                        reportReason = ""
+                        status = "Reported. We'll take a look."
+                    }
+                }
+            } message: {
+                Text("Tell us what's wrong and we'll review it.")
+            }
+            .sheet(isPresented: $pickingEmoji) {
+                EmojiPickerSheet { emoji in
+                    Task { await react(emoji, on: true) }
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -75,7 +126,10 @@ struct EntryDetailView: View {
                     .padding(.bottom, 6)
                 }
             }
-            .task { myId = try? await SupabaseService.shared.client.auth.session.user.id }
+            .task {
+                myId = try? await SupabaseService.shared.client.auth.session.user.id
+                await loadSocial()
+            }
             .sheet(isPresented: $editing) {
                 EntrySheet(mode: .edit(entry)) {
                     await onChanged?()
@@ -88,6 +142,118 @@ struct EntryDetailView: View {
                 Text("\(entry.restaurantName) and its photos will be removed.")
             }
         }
+    }
+
+    // ── Reactions & comments (the social loop on a meal) ─────────────────────
+
+    private var tallies: [(emoji: String, count: Int, mine: Bool)] {
+        Dictionary(grouping: reactions, by: \.emoji)
+            .map { (emoji: $0.key, count: $0.value.count,
+                    mine: $0.value.contains { $0.userId == myId }) }
+            .sorted { ($0.count, $1.emoji) > ($1.count, $0.emoji) }
+    }
+
+    private var reactionsRow: some View {
+        HStack(spacing: 6) {
+            ForEach(tallies, id: \.emoji) { tally in
+                Button {
+                    Task { await react(tally.emoji, on: !tally.mine) }
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(tally.emoji)
+                        Text("\(tally.count)").monospacedDigit()
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(tally.mine ? Color.accentColor.opacity(0.18) : Color(.systemGray6),
+                                in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            Button { pickingEmoji = true } label: {
+                Image(systemName: "face.smiling")
+                    .font(.caption)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Color(.systemGray6), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color(.secondaryLabel))
+            .accessibilityLabel("Add a reaction")
+            Spacer()
+        }
+    }
+
+    private var commentsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !comments.isEmpty {
+                Divider()
+                ForEach(comments) { comment in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(commentAuthors[comment.authorId]?.name ?? "Someone")
+                            .font(.caption.bold())
+                        Text(comment.text).font(.callout)
+                        Spacer(minLength: 0)
+                    }
+                    .contextMenu {
+                        if comment.authorId == myId || isMine {
+                            Button(role: .destructive) {
+                                Task {
+                                    try? await SupabaseService.shared.deleteEntryComment(id: comment.id)
+                                    comments.removeAll { $0.id == comment.id }
+                                }
+                            } label: { Label("Delete", systemImage: "trash") }
+                        }
+                        if comment.authorId != myId {
+                            Button(role: .destructive) {
+                                Task {
+                                    try? await SupabaseService.shared.report(
+                                        contentType: "comment", contentId: comment.id,
+                                        reason: "inappropriate")
+                                    status = "Reported."
+                                }
+                            } label: { Label("Report", systemImage: "flag") }
+                        }
+                    }
+                }
+            }
+            HStack(spacing: 8) {
+                TextField("Say something…", text: $draft)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 16))
+                Button {
+                    Task { await sendComment() }
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill").font(.title3)
+                }
+                .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            if let status {
+                Text(status).font(.caption).foregroundStyle(Color(.secondaryLabel))
+            }
+        }
+    }
+
+    private func loadSocial() async {
+        reactions = (try? await SupabaseService.shared.entryReactions(entryIds: [entry.id])) ?? []
+        comments = (try? await SupabaseService.shared.entryComments(entryId: entry.id)) ?? []
+        let ids = Array(Set(comments.map(\.authorId)))
+        let people = (try? await SupabaseService.shared.profiles(ids: ids)) ?? []
+        commentAuthors = Dictionary(uniqueKeysWithValues: people.map { ($0.id, $0) })
+    }
+
+    private func react(_ emoji: String, on: Bool) async {
+        try? await SupabaseService.shared.toggleEntryReaction(entryId: entry.id, emoji: emoji, on: on)
+        reactions = (try? await SupabaseService.shared.entryReactions(entryIds: [entry.id])) ?? reactions
+    }
+
+    private func sendComment() async {
+        let text = draft.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return }
+        do {
+            try await SupabaseService.shared.addEntryComment(entryId: entry.id, text: text)
+            draft = ""
+            await loadSocial()
+        } catch { status = error.localizedDescription }
     }
 
     private var header: some View {

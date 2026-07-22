@@ -8,6 +8,9 @@ struct PeopleView: View {
     @State private var following: Set<UUID> = []
     @State private var feed: [FeedItem] = []
     @State private var viewing: FeedItem?
+    @State private var blocked: Set<UUID> = []
+    @State private var showActivity = false
+    @State private var hasUnseenActivity = false
     @State private var status: String?
 
     private var searching: Bool { query.trimmingCharacters(in: .whitespaces).count >= 2 }
@@ -16,7 +19,7 @@ struct PeopleView: View {
         NavigationStack {
             List {
                 if searching {
-                    ForEach(results) { profile in
+                    ForEach(results.filter { !blocked.contains($0.id) }) { profile in
                         NavigationLink {
                             PublicProfileView(profile: profile)
                         } label: {
@@ -29,7 +32,7 @@ struct PeopleView: View {
                     }
                 } else {
                     Section("Discover") {
-                        ForEach(feed) { item in
+                        ForEach(feed.filter { !blocked.contains($0.author.id) }) { item in
                             Button {
                                 viewing = item
                             } label: {
@@ -64,11 +67,36 @@ struct PeopleView: View {
             .searchable(text: $query, prompt: "Name or username")
             .onChange(of: query) { Task { await search() } }
             .navigationTitle("People")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showActivity = true } label: {
+                        Image(systemName: "bell")
+                            .overlay(alignment: .topTrailing) {
+                                if hasUnseenActivity {
+                                    Circle().fill(.red).frame(width: 8, height: 8)
+                                        .offset(x: 2, y: -2)
+                                }
+                            }
+                    }
+                    .accessibilityLabel("Activity")
+                }
+            }
+            .sheet(isPresented: $showActivity, onDismiss: { hasUnseenActivity = false }) {
+                ActivityView()
+            }
             .task {
                 following = (try? await SupabaseService.shared.following()) ?? []
+                blocked = (try? await SupabaseService.shared.blockedIds()) ?? []
+                feed = (try? await SupabaseService.shared.discoverFeed()) ?? []
+                // Light unseen check: anything in activity newer than last open?
+                if let latest = (try? await SupabaseService.shared.activity(limit: 1))?.first {
+                    hasUnseenActivity = latest.date > ActivityView.lastSeen
+                }
+            }
+            .refreshable {
+                blocked = (try? await SupabaseService.shared.blockedIds()) ?? blocked
                 feed = (try? await SupabaseService.shared.discoverFeed()) ?? []
             }
-            .refreshable { feed = (try? await SupabaseService.shared.discoverFeed()) ?? [] }
         }
     }
 
@@ -82,6 +110,7 @@ struct PeopleView: View {
     private func toggle(_ userId: UUID, to follow: Bool) async {
         do {
             try await SupabaseService.shared.setFollowing(userId, follow)
+            SupabaseService.shared.logEvent(follow ? "followed" : "unfollowed")
             if follow { following.insert(userId) } else { following.remove(userId) }
         } catch { status = error.localizedDescription }
     }

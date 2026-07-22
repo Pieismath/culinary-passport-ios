@@ -40,7 +40,10 @@
 	<key>SUPABASE_URL</key>
 	<string>$(SUPABASE_URL)</string>
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchPaper</string>
+	</dict>
 	<key>UIRequiresFullScreen</key>
 	<true/>
 	<key>UISupportedInterfaceOrientations</key>

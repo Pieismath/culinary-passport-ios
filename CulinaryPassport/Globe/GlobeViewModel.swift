@@ -11,8 +11,12 @@ final class GlobeViewModel: ObservableObject {
     @Published var statusByCountry: [String: Set<UUID>] = [:]
     @Published var usersById: [UUID: Profile] = [:]
     @Published var entriesByCountry: [String: [Entry]] = [:]
+    @Published var wishlisted: Set<String> = []
     @Published var loading = false
     @Published var error: String?
+
+    /// Want-to-try tint — the web's amber queue treatment.
+    static let queueAmber = UIColor(red: 0xd9/255, green: 0xa0/255, blue: 0x4a/255, alpha: 1)
 
     /// Shared "both have tried it" tint — web config.ts PURPLE (#8b6fd8).
     static let purple = UIColor(red: 0x8b/255, green: 0x6f/255, blue: 0xd8/255, alpha: 1)
@@ -40,38 +44,30 @@ final class GlobeViewModel: ObservableObject {
     }
 
     func load() async {
-        loading = true
+        loading = statusByCountry.isEmpty
         defer { loading = false }
+
+        // Stale-while-refresh: paint the last known globe instantly.
+        let uid = try? await SupabaseService.shared.client.auth.session.user.id
+        if statusByCountry.isEmpty,
+           let cached = DiskCache.load("globe-entries", user: uid, as: [Entry].self) {
+            apply(entries: cached, me: nil)
+            loading = false
+        }
+
         do {
             // This globe is YOURS — myEntries() is own-only. Shared eating
             // lives on the group globe.
             let entries = try await SupabaseService.shared.myEntries()
+            DiskCache.save(entries, key: "globe-entries", user: uid)
             guard let me = try await SupabaseService.shared.myProfile() else {
                 // Profile row is gone (deleted user / stale session) — sign out
                 // cleanly rather than surfacing an error on the globe.
                 await SupabaseService.shared.signOut()
                 return
             }
-
-            var status: [String: Set<UUID>] = [:]
-            var byCountry: [String: [Entry]] = [:]
-            for entry in entries {
-                status[entry.countryCode, default: []].insert(entry.userId)
-                byCountry[entry.countryCode, default: []].append(entry)
-            }
-
-            // Resolve any authors we don't already know (beyond the current user).
-            var users: [UUID: Profile] = [me.id: me]
-            let unknown = Set(entries.map(\.userId)).subtracting(users.keys)
-            if !unknown.isEmpty {
-                for profile in (try? await SupabaseService.shared.profiles(ids: Array(unknown))) ?? [] {
-                    users[profile.id] = profile
-                }
-            }
-
-            statusByCountry = status
-            entriesByCountry = byCountry
-            usersById = users
+            apply(entries: entries, me: me)
+            wishlisted = (try? await SupabaseService.shared.wishlist()) ?? []
             error = nil
         } catch {
             // -uiPreview browses without a backend; don't surface those failures.
@@ -79,6 +75,18 @@ final class GlobeViewModel: ObservableObject {
                 self.error = error.localizedDescription
             }
         }
+    }
+
+    private func apply(entries: [Entry], me: Profile?) {
+        var status: [String: Set<UUID>] = [:]
+        var byCountry: [String: [Entry]] = [:]
+        for entry in entries {
+            status[entry.countryCode, default: []].insert(entry.userId)
+            byCountry[entry.countryCode, default: []].append(entry)
+        }
+        statusByCountry = status
+        entriesByCountry = byCountry
+        if let me { usersById[me.id] = me }
     }
 
     /// capColor() port. `selected` gets a small opacity boost, like the web
@@ -89,6 +97,10 @@ final class GlobeViewModel: ObservableObject {
         let tasters = statusByCountry[code] ?? []
 
         if tasters.isEmpty {
+            // Queued-but-untried gets the amber "next up" wash.
+            if wishlisted.contains(code) {
+                return Self.opaque(Self.queueAmber, 0.42 + boost)
+            }
             return Self.opaque(Self.parchment, 0.55 + boost)
         }
         let meals = entriesByCountry[code]?.count ?? 1
@@ -106,6 +118,21 @@ final class GlobeViewModel: ObservableObject {
     /// Human-readable "who's tried it" for the detail panel.
     func tasterNames(for code: String) -> [String] {
         (statusByCountry[code] ?? []).compactMap { usersById[$0]?.name }.sorted()
+    }
+
+    /// Optimistic wishlist toggle; reverts on failure.
+    func toggleWishlist(_ code: String) {
+        let turningOn = !wishlisted.contains(code)
+        if turningOn { wishlisted.insert(code) } else { wishlisted.remove(code) }
+        Task {
+            do {
+                try await SupabaseService.shared.setWishlisted(code, turningOn)
+                SupabaseService.shared.logEvent("wishlist_toggled",
+                                                props: ["country": code, "on": String(turningOn)])
+            } catch {
+                if turningOn { wishlisted.remove(code) } else { wishlisted.insert(code) }
+            }
+        }
     }
 }
 

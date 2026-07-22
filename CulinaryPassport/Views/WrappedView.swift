@@ -84,12 +84,48 @@ struct WrappedView: View {
         }
         .navigationTitle("Wrapped")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if stats.total > 0 {
+                ToolbarItem(placement: .primaryAction) {
+                    ShareLink(item: shareImage(),
+                              preview: SharePreview("My \(String(year)) in food", image: shareImage())) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                }
+            }
+        }
         .task {
             allEntries = (try? await SupabaseService.shared.myEntries()) ?? []
             if let latest = years.first { year = latest }
             loaded = true
         }
         .overlay { if !loaded { ProgressView() } }
+    }
+
+    /// The year, as one story-sized card.
+    private func shareImage() -> Image {
+        let s = stats
+        let renderer = ImageRenderer(content:
+            VStack(spacing: 14) {
+                Text("MY \(String(year)) IN FOOD")
+                    .font(.caption.weight(.bold)).tracking(3)
+                    .foregroundStyle(Color(.secondaryLabel))
+                Text("\(s.total)").font(.system(size: 88, weight: .heavy))
+                Text("meals · \(s.cuisines) cuisines · \(s.continents) continents")
+                    .font(.headline)
+                if let top = s.topCuisine {
+                    Text("Top cuisine: \(top.flag) \(top.name) ×\(top.count)")
+                        .font(.subheadline).foregroundStyle(Color(.secondaryLabel))
+                }
+                Text("· CULINARY PASSPORT ·")
+                    .font(.system(size: 10, weight: .semibold)).tracking(2.5)
+                    .foregroundStyle(Color(.tertiaryLabel))
+            }
+            .padding(48)
+            .background(Color(red: 0.972, green: 0.960, blue: 0.930))
+        )
+        renderer.scale = 3
+        return renderer.uiImage.map(Image.init(uiImage:)) ?? Image(systemName: "sparkles")
     }
 }
 
