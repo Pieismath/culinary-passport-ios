@@ -52,7 +52,7 @@ struct OnboardingView: View {
         VStack(spacing: 22) {
             Spacer()
             Text("🌍").font(.system(size: 64))
-            Text("Welcome to your\nCulinary Passport")
+            Text("Welcome to Stampd")
                 .font(.system(.title, design: .serif).weight(.semibold))
                 .multilineTextAlignment(.center)
             Text("Every cuisine you eat colors in a country.\nThis color is you, on every globe.")

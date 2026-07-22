@@ -90,7 +90,7 @@ struct GroupDetailsView: View {
                         } label: {
                             Image(systemName: "doc.on.doc")
                         }
-                        ShareLink(item: "Join \"\(group.name)\" on Culinary Passport — invite code: \(group.inviteCode)") {
+                        ShareLink(item: "Join \"\(group.name)\" on Stampd — invite code: \(group.inviteCode)") {
                             Image(systemName: "square.and.arrow.up")
                         }
                     }

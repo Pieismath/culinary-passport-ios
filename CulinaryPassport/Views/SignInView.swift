@@ -18,11 +18,18 @@ struct SignInView: View {
     var body: some View {
         VStack(spacing: 14) {
             Spacer()
-            VStack(spacing: 6) {
-                Text("Culinary Passport")
-                    .font(.system(.largeTitle, design: .serif)).italic()
-                Text("Fill the globe, one cuisine at a time.")
-                    .font(.subheadline).foregroundStyle(.secondary)
+            VStack(spacing: 14) {
+                Image("BrandMark")
+                    .resizable()
+                    .frame(width: 96, height: 96)
+                    .clipShape(RoundedRectangle(cornerRadius: 22))
+                VStack(spacing: 6) {
+                    Text("Stampd")
+                        .font(.system(size: 38, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color("BrandGreen"))
+                    Text("Fill the globe, one cuisine at a time.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
             }
             Spacer()
 

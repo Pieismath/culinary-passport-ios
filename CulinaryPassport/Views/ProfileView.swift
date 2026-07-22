@@ -170,7 +170,7 @@ struct ProfileView: View {
 
     private var shareText: String {
         let handle = profile?.username.map { "@\($0)" } ?? profile?.name ?? "me"
-        return "\(handle) has eaten \(insights.countries) of the world's cuisines on Culinary Passport."
+        return "\(handle) has eaten \(insights.countries) of the world's cuisines on Stampd."
     }
 
     // ── How much of the world you've eaten ───────────────────────────────────

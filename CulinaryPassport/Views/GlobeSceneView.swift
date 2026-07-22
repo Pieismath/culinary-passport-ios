@@ -125,7 +125,12 @@ struct GlobeSceneView: View {
     private var triedCount: Int { vm.statusByCountry.count }
 
     private var progressChips: some View {
-        ChipLabel(text: "\(triedCount) of \(CountryStore.all.count) cuisines")
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Stampd")
+                .font(.system(size: 21, weight: .bold, design: .rounded))
+                .foregroundStyle(Color("BrandGreen"))
+            ChipLabel(text: "\(triedCount) of \(CountryStore.all.count) cuisines")
+        }
     }
 
     // ── Spin ─────────────────────────────────────────────────────────────────
@@ -257,16 +262,13 @@ private struct GlobeBackdrop: View {
                     .frame(width: side * 1.02, height: side * 1.02)
                     .blur(radius: 28)
 
-                VStack(spacing: 5) {
-                    Text("YOUR CULINARY WORLD")
-                        .font(.caption2.weight(.semibold))
-                        .tracking(2.4)
-                    Text(triedCount == 0 ? "Every journey starts with one plate." : "Every meal leaves a mark.")
-                        .font(.system(.subheadline, design: .serif))
-                        .italic()
-                }
-                .foregroundStyle(ink.opacity(0.72))
-                .position(x: proxy.size.width / 2, y: proxy.size.height * 0.145)
+                // The Stampd wordmark (top-left overlay) is the page brand;
+                // this is just the tagline, kept clear of the chip row.
+                Text(triedCount == 0 ? "Every journey starts with one plate." : "Every meal leaves a mark.")
+                    .font(.system(.subheadline, design: .serif))
+                    .italic()
+                    .foregroundStyle(ink.opacity(0.72))
+                    .position(x: proxy.size.width / 2, y: proxy.size.height * 0.158)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }

@@ -117,7 +117,7 @@ struct WrappedView: View {
                     Text("Top cuisine: \(top.flag) \(top.name) ×\(top.count)")
                         .font(.subheadline).foregroundStyle(Color(.secondaryLabel))
                 }
-                Text("· CULINARY PASSPORT ·")
+                Text("· STAMPD ·")
                     .font(.system(size: 10, weight: .semibold)).tracking(2.5)
                     .foregroundStyle(Color(.tertiaryLabel))
             }

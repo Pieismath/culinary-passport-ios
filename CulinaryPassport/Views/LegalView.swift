@@ -39,7 +39,7 @@ struct LegalView: View {
 
     @ViewBuilder private var terms: some View {
         section("The deal", """
-        Culinary Passport is a place to log the world's cuisines as you eat \
+        Stampd is a place to log the world's cuisines as you eat \
         them and share that journey with people you choose. By creating an \
         account you agree to these terms and to the community rules below.
         """)

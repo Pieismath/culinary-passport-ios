@@ -7,15 +7,31 @@ struct CulinaryPassportApp: App {
 
     @State private var showPasswordReset = false
 
+    @State private var showSplash = true
+
     var body: some Scene {
         WindowGroup {
-            SwiftUI.Group {
-                if session.isSignedIn || session.uiPreview {
-                    RootView()
-                        .environment(session)
-                } else {
-                    SignInView()
-                        .environment(session)
+            ZStack {
+                SwiftUI.Group {
+                    if session.isSignedIn || session.uiPreview {
+                        RootView()
+                            .environment(session)
+                    } else {
+                        SignInView()
+                            .environment(session)
+                    }
+                }
+                // Brand moment on every cold launch: the system launch frame is
+                // already this green (UILaunchScreen), the name pops, then the
+                // app fades in underneath. Total ~1.2s.
+                if showSplash {
+                    SplashView()
+                        .zIndex(1)
+                        .transition(.opacity)
+                        .task {
+                            try? await Task.sleep(for: .milliseconds(900))
+                            withAnimation(.easeOut(duration: 0.3)) { showSplash = false }
+                        }
                 }
             }
             // The password-reset email links back here; the SDK turns the URL
@@ -71,6 +87,25 @@ final class SessionStore {
             // like the push permission prompt until the session is valid.
             let sessionIsValid = state.session.map { !$0.isExpired } ?? false
             if sessionIsValid && !skipPush { PushRegistrar.requestAndRegister() }
+        }
+    }
+}
+
+/// The green flash card at cold launch: "Stampd" pops in over brand green.
+private struct SplashView: View {
+    @State private var popped = false
+
+    var body: some View {
+        ZStack {
+            Color("BrandGreen").ignoresSafeArea()
+            Text("Stampd")
+                .font(.system(size: 56, weight: .bold, design: .rounded))
+                .foregroundStyle(Color("BrandCream"))
+                .scaleEffect(popped ? 1 : 0.72)
+                .opacity(popped ? 1 : 0)
+        }
+        .onAppear {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.62)) { popped = true }
         }
     }
 }

@@ -100,7 +100,7 @@ struct StampCard: View {
             Text(Date().formatted(.dateTime.day().month(.abbreviated).year()))
                 .font(.caption2)
                 .tracking(1.5)
-            Text("· CULINARY PASSPORT ·")
+            Text("· STAMPD ·")
                 .font(.system(size: 8, weight: .semibold))
                 .tracking(2.5)
                 .padding(.top, 2)

@@ -28,8 +28,13 @@ targets:
     info:
       path: CulinaryPassport/Info.plist
       properties:
-        UILaunchScreen:
-          UIColorName: LaunchPaper
+        # Home-screen name. The bundle id and culinarypassport:// scheme stay —
+        # they're wired into Supabase auth redirects and are never user-visible.
+        CFBundleDisplayName: Stampd
+        # Brand-green system launch frame (storyboard — UIColorName silently
+        # falls back to white on the simulator), so the splash overlay picks
+        # up from an identical green first frame with zero flash.
+        UILaunchStoryboardName: LaunchScreen
         # Portrait-only + full screen: silences the "all interface orientations
         # must be supported" warning without pretending to support landscape.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
