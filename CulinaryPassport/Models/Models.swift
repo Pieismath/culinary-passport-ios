@@ -131,10 +131,21 @@ struct Memory: Codable, Identifiable, Hashable {
 
     var day: Date? { DayFormat.date(from: date) }
     var hasCoordinate: Bool { lat != nil && lng != nil }
+
+    /// Whether this row already holds every field of `patch` (an update whose
+    /// response was lost may still have landed).
+    func matches(_ patch: MemoryPatch) -> Bool {
+        countryCode == patch.countryCode && title == patch.title && (city ?? "") == patch.city
+            && String(date.prefix(10)) == patch.dateTried && (notes ?? "") == patch.notes
+            && photos == patch.photos && lat == patch.lat && lng == patch.lng
+            && visibility.rawValue == patch.visibility
+    }
 }
 
-/// Insert payload — id / created_at come from Postgres defaults.
+/// Insert payload. The id is chosen on the device so a retried save can't
+/// land twice; created_at comes from Postgres.
 struct NewMemory: Encodable {
+    let id: UUID
     let userId: UUID
     let kind = "memory"
     var countryCode: String
@@ -312,22 +323,51 @@ struct ReactionTally: Identifiable, Hashable {
     }
 }
 
+// ── Copy ────────────────────────────────────────────────────────────────────
+
+extension Int {
+    /// "1 country" / "3 countries" — never "1 countries".
+    func counted(_ singular: String, _ plural: String? = nil) -> String {
+        "\(self.formatted()) \(self == 1 ? singular : (plural ?? singular + "s"))"
+    }
+}
+
 // ── Dates ───────────────────────────────────────────────────────────────────
 
-/// Calendar days as Postgres `date` strings. POSIX + Gregorian + the device's
-/// time zone: a memory from "12 April" stays on 12 April.
+/// Calendar days as Postgres `date` strings, Gregorian in the device's time
+/// zone: a memory from "12 April" stays on 12 April.
 enum DayFormat {
-    private static let formatter: DateFormatter = {
-        let f = DateFormatter()
-        f.calendar = Calendar(identifier: .gregorian)
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = .current
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var cachedCalendar = Calendar(identifier: .gregorian)
 
-    static func string(from date: Date) -> String { formatter.string(from: date) }
-    static func date(from string: String) -> Date? { formatter.date(from: String(string.prefix(10))) }
+    /// Gregorian in `zone` — by default the zone the device is in *now*. A
+    /// formatter built once kept the launch zone, so after a flight the date
+    /// picker and the saved day disagreed by one.
+    static func calendar(in zone: TimeZone = .current) -> Calendar {
+        lock.lock(); defer { lock.unlock() }
+        if cachedCalendar.timeZone != zone { cachedCalendar.timeZone = zone }
+        return cachedCalendar
+    }
+
+    static func string(from date: Date, in zone: TimeZone = .current) -> String {
+        let parts = calendar(in: zone).dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 1, parts.day ?? 1)
+    }
+
+    static func date(from string: String, in zone: TimeZone = .current) -> Date? {
+        let fields = string.prefix(10).split(separator: "-").compactMap { Int($0) }
+        guard fields.count == 3 else { return nil }
+        return date(year: fields[0], month: fields[1], day: fields[2], in: zone)
+    }
+
+    /// That moment on the wall clock, or nil for times that don't exist (Feb 30).
+    static func date(year: Int, month: Int, day: Int, hour: Int = 0, minute: Int = 0, second: Int = 0,
+                     in zone: TimeZone = .current) -> Date? {
+        let gregorian = calendar(in: zone)
+        let wanted = DateComponents(year: year, month: month, day: day, hour: hour, minute: minute, second: second)
+        guard wanted.isValidDate(in: gregorian) else { return nil }
+        return gregorian.date(from: wanted)
+    }
 
     /// "12 Apr 2024"
     static func pretty(_ raw: String) -> String {

@@ -94,7 +94,12 @@ struct WrappedView: View {
         }
         .task(id: year) { renderShareCard() }
         .onAppear {
-            if let latest = years.first, review.isEmpty { year = latest }
+            // availableYears always includes this year; start on the latest
+            // year that actually has travel in it.
+            if review.isEmpty,
+               let latest = years.first(where: { !YearInReview(year: $0, stamps: app.stamps, memories: app.memories).isEmpty }) {
+                year = latest
+            }
         }
     }
 

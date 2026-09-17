@@ -71,6 +71,18 @@ final class SupabaseBackend: Backend {
         stride(from: 0, to: items.count, by: size).map { Array(items[$0..<min($0 + size, items.count)]) }
     }
 
+    /// PostgREST silently caps a response (1,000 rows on hosted projects).
+    /// Page through a stably ordered query until a short page ends it.
+    private func allPages<T: Decodable>(pageSize: Int = 500,
+                                        _ page: (_ from: Int, _ to: Int) async throws -> [T]) async throws -> [T] {
+        var result: [T] = []
+        while true {
+            let rows = try await page(result.count, result.count + pageSize - 1)
+            result += rows
+            if rows.count < pageSize { return result }
+        }
+    }
+
     // ── Session ──────────────────────────────────────────────────────────────
 
     func currentUserId() async throws -> UUID { try await uid() }
@@ -127,9 +139,11 @@ final class SupabaseBackend: Backend {
     func searchProfiles(_ query: String) async throws -> [Profile] {
         let term = Self.sanitizedSearchTerm(query)
         guard term.count >= 2 else { return [] }
+        let me = try await uid()
         return try await client.from("profiles").select()
             .eq("is_public", value: true)
             .or("name.ilike.%\(term)%,username.ilike.%\(term)%")
+            .neq("id", value: me)
             .limit(25)
             .execute().value
     }
@@ -137,12 +151,16 @@ final class SupabaseBackend: Backend {
     // ── Memories ─────────────────────────────────────────────────────────────
 
     func memories(userId: UUID) async throws -> [Memory] {
-        try await client.from("entries").select()
-            .eq("kind", value: "memory")
-            .eq("user_id", value: userId)
-            .order("date_tried", ascending: false)
-            .order("created_at", ascending: false)
-            .execute().value
+        try await allPages { from, to in
+            try await client.from("entries").select()
+                .eq("kind", value: "memory")
+                .eq("user_id", value: userId)
+                .order("date_tried", ascending: false)
+                .order("created_at", ascending: false)
+                .order("id")
+                .range(from: from, to: to)
+                .execute().value
+        }
     }
 
     func memory(id: UUID) async throws -> Memory? {
@@ -215,9 +233,15 @@ final class SupabaseBackend: Backend {
 
     func stamps(userIds: [UUID]) async throws -> [Stamp] {
         var result: [Stamp] = []
+        // 80 well-travelled people is easily more than one response holds.
         for chunk in chunks(Array(Set(userIds))) {
-            let rows: [Stamp] = try await client.from("stamps").select()
-                .in("user_id", values: chunk).execute().value
+            let rows: [Stamp] = try await allPages { from, to in
+                try await client.from("stamps").select()
+                    .in("user_id", values: chunk)
+                    .order("user_id").order("country_code")
+                    .range(from: from, to: to)
+                    .execute().value
+            }
             result += rows
         }
         return result
@@ -352,9 +376,11 @@ final class SupabaseBackend: Backend {
     }
 
     func discoverFeed(before: Date?, limit: Int) async throws -> [Memory] {
+        let me = try await uid()
         var query = client.from("entries").select()
             .eq("kind", value: "memory")
             .eq("visibility", value: "public")
+            .neq("user_id", value: me)
         if let before {
             query = query.lt("created_at", value: before.formatted(Self.cursorStyle))
         }

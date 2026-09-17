@@ -468,7 +468,7 @@ struct CountryMemoriesSheet: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
     @State private var viewing: Memory?
-    @State private var adding: MemoryEditorView.Mode?
+    @State private var adding: EditorRequest?
     @State private var localIds: [String] = []
     @State private var confirmRemove = false
 
@@ -496,7 +496,7 @@ struct CountryMemoriesSheet: View {
                     }
 
                     Button {
-                        adding = .new(countryCode: code, pickPhotosFirst: true)
+                        adding = EditorRequest(mode: .new(countryCode: code, pickPhotosFirst: true))
                     } label: {
                         Label("Add a memory here", systemImage: "photo.badge.plus")
                     }
@@ -504,12 +504,12 @@ struct CountryMemoriesSheet: View {
 
                     if !localIds.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
-                            SectionHeader("On this phone", subtitle: "\(localIds.count) photos from \(country?.name ?? "here") — only you can see these")
+                            SectionHeader("On this phone", subtitle: "Photos from \(country?.name ?? "here") — only you can see these")
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 8) {
                                     ForEach(localIds.prefix(30), id: \.self) { id in
                                         Button {
-                                            adding = .fromLibrary(assetIds: [id], countryCode: code)
+                                            adding = EditorRequest(mode: .fromLibrary(assetIds: [id], countryCode: code))
                                         } label: {
                                             LocalAssetThumbnail(identifier: id, side: 96)
                                         }
@@ -559,7 +559,10 @@ struct CountryMemoriesSheet: View {
                 }
             }
             .sheet(item: $viewing) { MemoryDetailView(memory: $0) }
-            .sheet(item: Binding(get: { adding.map(EditorRequest.init) }, set: { if $0 == nil { adding = nil } })) { request in
+            // A stored request with a stable id. (Deriving the item in a
+            // Binding getter minted a new id every render, so saving — which
+            // re-renders this sheet — tore the editor down and reopened it.)
+            .sheet(item: $adding) { request in
                 MemoryEditorView(mode: request.mode)
             }
             .task { localIds = LocalPhotoIndex.assetIds(for: code) }

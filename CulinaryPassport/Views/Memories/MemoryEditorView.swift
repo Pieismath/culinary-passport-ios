@@ -19,6 +19,8 @@ struct MemoryEditorView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var draft = MemoryDraft()
+    /// Stable across retries: a save whose response was lost can't land twice.
+    @State private var newMemoryId = UUID()
     @State private var newPhotos: [PickedPhoto] = []
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var showPicker = false
@@ -91,9 +93,12 @@ struct MemoryEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
+                    // Disabled mid-save: discarding couldn't stop the upload,
+                    // so the "discarded" memory still appeared.
                     Button("Cancel") {
                         if isDirty { confirmDiscard = true } else { dismiss() }
                     }
+                    .disabled(saving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(isNewCountry ? "Stamp it" : "Save") { Task { await save() } }
@@ -258,9 +263,11 @@ struct MemoryEditorView: View {
     private var whereCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
+                // No autocorrect on place names: "Preikestolen" is not a typo.
                 TextField("Name it — “Sunset at Oia”", text: $draft.title)
                     .font(.headline)
                     .focused($focused, equals: .title)
+                    .autocorrectionDisabled()
                     .submitLabel(.done)
                 Button { showPlaceSearch = true } label: {
                     Image(systemName: "mappin.and.ellipse")
@@ -309,6 +316,7 @@ struct MemoryEditorView: View {
                 TextField("City (optional)", text: $draft.city)
                     .focused($focused, equals: .city)
                     .textContentType(.addressCity)
+                    .autocorrectionDisabled()
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -475,7 +483,8 @@ struct MemoryEditorView: View {
         saving = true
         defer { saving = false }
         do {
-            let result = try await app.saveMemory(draft, editing: original, newPhotos: newPhotos.map(\.jpeg),
+            let result = try await app.saveMemory(draft, editing: original, newId: newMemoryId,
+                                                  newPhotos: newPhotos.map(\.jpeg),
                                                   shareTo: draft.visibility == .private ? [] : shareGroups)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             if result.isNewCountry {

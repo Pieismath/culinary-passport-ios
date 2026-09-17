@@ -177,6 +177,17 @@ enum GlobeDecor {
         }
     }
 
+    /// One undirected edge, rounded to ~10 cm so shared boundaries match.
+    private struct EdgeKey: Hashable {
+        let low: SIMD2<Int64>, high: SIMD2<Int64>
+
+        init(_ p: SIMD2<Double>, _ q: SIMD2<Double>) {
+            let a = SIMD2<Int64>(Int64((p.x * 1e6).rounded()), Int64((p.y * 1e6).rounded()))
+            let b = SIMD2<Int64>(Int64((q.x * 1e6).rounded()), Int64((q.y * 1e6).rounded()))
+            if (a.x, a.y) <= (b.x, b.y) { low = a; high = b } else { low = b; high = a }
+        }
+    }
+
     private struct MeshBuilder {
         var vertices: [SCNVector3] = []
         var triangleIndices: [Int32] = []
@@ -186,48 +197,77 @@ enum GlobeDecor {
         var isEmpty: Bool { vertices.isEmpty }
 
         mutating func add(rings: [Ring], radius: Double, halfWidth: Double) {
+            let joins = sharedEdges(of: rings)
             for ring in rings {
                 var loop = ring
                 if loop.count > 1, loop.first == loop.last { loop.removeLast() }
                 guard loop.count >= 3 else { continue }
 
-                // Densify in lng/lat space — the same straight-in-lng/lat path
-                // the fills follow, so line and fill edges stay coincident.
-                var dense: Ring = []
+                // Draw each run of real border between cuts. Densify in
+                // lng/lat space — the same straight-in-lng/lat path the fills
+                // follow, so line and fill edges stay coincident.
+                var run: Ring = []
                 for i in 0..<loop.count {
                     let a = loop[i]
                     let b = loop[(i + 1) % loop.count]
-                    dense.append(a)
+                    if isCut(a, b) || joins.contains(EdgeKey(a, b)) {
+                        addPath(run, radius: radius, halfWidth: halfWidth)
+                        run = []
+                        continue
+                    }
+                    if run.isEmpty { run.append(a) }
                     let d = b - a
-                    let length = max(abs(d.x), abs(d.y))
-                    let steps = Int(length / maxSegmentDegrees)
+                    let steps = Int(max(abs(d.x), abs(d.y)) / maxSegmentDegrees)
                     if steps > 0 {
                         for s in 1...steps {
-                            dense.append(a + d * (Double(s) / Double(steps + 1)))
+                            run.append(a + d * (Double(s) / Double(steps + 1)))
                         }
                     }
+                    run.append(b)
                 }
+                addPath(run, radius: radius, halfWidth: halfWidth)
+            }
+        }
 
-                // Hairline copy (crisp at any distance).
-                let lineBase = Int32(lineVertices.count)
-                lineVertices.append(contentsOf: dense.map {
-                    GlobeMath.vec3(lat: $0.y, lng: $0.x, radius: radius)
-                })
-                let n = Int32(dense.count)
-                for i in 0..<n {
-                    lineIndices.append(lineBase + i)
-                    lineIndices.append(lineBase + (i + 1) % n)
-                }
+        /// A hairline plus a ribbon along one open run of border.
+        private mutating func addPath(_ points: Ring, radius: Double, halfWidth: Double) {
+            guard points.count >= 2 else { return }
+            let lineBase = Int32(lineVertices.count)
+            lineVertices.append(contentsOf: points.map {
+                GlobeMath.vec3(lat: $0.y, lng: $0.x, radius: radius)
+            })
+            for i in 0..<Int32(points.count - 1) {
+                lineIndices.append(lineBase + i)
+                lineIndices.append(lineBase + i + 1)
+            }
+            // Ribbon: one quad per segment, plus a diamond at each vertex so
+            // corners join without notches.
+            for i in 0..<(points.count - 1) {
+                addQuad(from: points[i], to: points[i + 1], radius: radius, halfWidth: halfWidth)
+                addJoin(at: points[i], radius: radius, halfWidth: halfWidth)
+            }
+            addJoin(at: points[points.count - 1], radius: radius, halfWidth: halfWidth)
+        }
 
-                // Ribbon: one quad per segment, plus a diamond at each vertex
-                // so corners join without notches.
-                for i in 0..<dense.count {
-                    let a = dense[i]
-                    let b = dense[(i + 1) % dense.count]
-                    addQuad(from: a, to: b, radius: radius, halfWidth: halfWidth)
-                    addJoin(at: a, radius: radius, halfWidth: halfWidth)
+        /// Natural Earth cuts Russia, Fiji and Antarctica at ±180° and closes
+        /// Antarctica across the South Pole. Those cuts aren't borders.
+        private func isCut(_ a: SIMD2<Double>, _ b: SIMD2<Double>) -> Bool {
+            (abs(abs(a.x) - 180) < 1e-6 && abs(abs(b.x) - 180) < 1e-6) || (a.y <= -89.9 && b.y <= -89.9)
+        }
+
+        /// Edges two rings of the same country share — the line where
+        /// Somaliland meets Somalia, or Northern Cyprus meets Cyprus. Drawing
+        /// them would put a border through the middle of one stamp.
+        private func sharedEdges(of rings: [Ring]) -> Set<EdgeKey> {
+            guard rings.count > 1 else { return [] }
+            var seen: Set<EdgeKey> = [], shared: Set<EdgeKey> = []
+            for ring in rings where ring.count >= 2 {
+                for i in 0..<ring.count {
+                    let key = EdgeKey(ring[i], ring[(i + 1) % ring.count])
+                    if !seen.insert(key).inserted { shared.insert(key) }
                 }
             }
+            return shared
         }
 
         /// Perpendicular offset has to be computed in a locally-metric space:

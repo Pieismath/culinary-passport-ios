@@ -55,6 +55,14 @@ struct GlobeScreen: View {
                 isEmphasized: { app.visitedCodes.contains($0) || app.bucketList.contains($0) }
             )
             .ignoresSafeArea()
+            // SceneKit is opaque to VoiceOver: describe the globe and offer
+            // the same jobs through actions (search finds any country).
+            .accessibilityElement()
+            .accessibilityLabel("Globe")
+            .accessibilityValue("\(app.stats.countries) countries visited, \(app.stats.worldPercentText) of the world")
+            .accessibilityHint("Use Find a country to open any country's details.")
+            .accessibilityAction(named: "Find a country") { sheet = .search }
+            .accessibilityAction(named: "Add a memory") { sheet = .addMemory(country: nil) }
 
             bottomArea
         }
@@ -78,6 +86,11 @@ struct GlobeScreen: View {
             MemoryDetailView(memory: memory)
         }
         .task(id: selected) { await loadFriends(for: selected) }
+        .onChange(of: app.networkIds) {
+            // Follow/unfollow/join changes who "has been" — drop the cache.
+            friendStamps = [:]
+            Task { await loadFriends(for: selected) }
+        }
         #if DEBUG
         .task {
             let args = ProcessInfo.processInfo.arguments
@@ -173,6 +186,22 @@ struct GlobeScreen: View {
             .transition(.move(edge: .bottom).combined(with: .opacity))
         } else {
             VStack(spacing: 12) {
+                if case .failed(let message) = app.loadState {
+                    HStack(spacing: 10) {
+                        Image(systemName: "wifi.exclamationmark").foregroundStyle(Color.stampRed)
+                        Text(message)
+                            .font(.subheadline)
+                            .foregroundStyle(Color.ink)
+                            .lineLimit(2)
+                        Spacer(minLength: 4)
+                        Button("Retry") {
+                            Task { await app.bootstrap() }
+                        }
+                        .buttonStyle(.capsuleProminent)
+                    }
+                    .card(padding: 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
                 if app.loadState == .loaded && app.stamps.isEmpty && app.memories.isEmpty {
                     BuildPassportCard(
                         onScan: { sheet = .importPhotos },

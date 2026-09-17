@@ -28,9 +28,15 @@ enum CountryGeometry {
     private static let polygons: [String: [CountryPolygon]] = load()
 
     /// ISO_A2 → its outer rings (a country may be several polygons, e.g. islands).
-    /// Rendering consumes these same boundaries; hit resolution additionally
-    /// consults the interior rings retained in `polygons` above.
+    /// Borders are drawn from these; hit resolution and fills additionally
+    /// consult the interior rings retained in `polygons` above.
     static let rings: [String: [Ring]] = polygons.mapValues { $0.map(\.outer) }
+
+    /// Outer ring + interior holes per polygon — what the fill is built from,
+    /// so an enclave (Lesotho inside South Africa) isn't painted over.
+    static func ringsWithHoles(_ code: String) -> [(outer: Ring, holes: [Ring])] {
+        (polygons[code] ?? []).map { ($0.outer, $0.holes) }
+    }
 
     private static func load() -> [String: [CountryPolygon]] {
         guard let url = Bundle.main.url(forResource: "countries", withExtension: "geojson"),
@@ -284,10 +290,15 @@ enum EarClip {
                 let a = pts[prev], b = pts[curr], c = pts[next]
                 guard cross(a, b, c) > 0 else { continue } // reflex vertex, not an ear
 
-                // No other vertex may lie inside triangle a-b-c.
+                // No other vertex may lie inside triangle a-b-c. A vertex
+                // sitting exactly on a corner is the far side of a hole bridge
+                // (see `merge`), not a blocker — otherwise no ear is ever
+                // found and the whole country goes unfilled.
                 var contains = false
                 for j in indices where j != prev && j != curr && j != next {
-                    if pointInTriangle(pts[j], a, b, c) { contains = true; break }
+                    let p = pts[j]
+                    if p == a || p == b || p == c { continue }
+                    if pointInTriangle(p, a, b, c) { contains = true; break }
                 }
                 if contains { continue }
 
@@ -351,6 +362,72 @@ enum EarClip {
             }
         }
         return points
+    }
+
+    /// Splice interior rings into the outer loop along zero-width bridges, so
+    /// ear clipping (which knows nothing about holes) leaves an enclave empty.
+    static func merge(outer: Ring, holes: [Ring]) -> Ring {
+        var loop = cleaned(outer)
+        guard !holes.isEmpty, loop.count >= 3 else { return loop }
+        if signedArea(loop) < 0 { loop.reverse() }              // outer CCW…
+
+        // Rightmost hole first: its bridge can then run through outer edges
+        // only, never through a hole spliced later.
+        for hole in holes.sorted(by: { rightmost($0).x > rightmost($1).x }) {
+            var ring = cleaned(hole)
+            guard ring.count >= 3 else { continue }
+            if signedArea(ring) > 0 { ring.reverse() }          // …holes CW
+            guard let bridge = bridge(from: ring, into: loop) else { continue }
+            let entry = ring[bridge.hole]
+            let anchor = loop[bridge.loop]
+            var merged = Array(loop[...bridge.loop])
+            merged += ring[bridge.hole...]
+            merged += ring[..<bridge.hole]
+            merged.append(entry)
+            merged.append(anchor)
+            merged += loop[(bridge.loop + 1)...]
+            loop = merged
+        }
+        return loop
+    }
+
+    private static func rightmost(_ ring: Ring) -> SIMD2<Double> {
+        ring.max { $0.x < $1.x } ?? .zero
+    }
+
+    /// The shortest bridge from a hole vertex to an outer vertex that doesn't
+    /// cross any edge of either ring.
+    private static func bridge(from hole: Ring, into loop: Ring) -> (loop: Int, hole: Int)? {
+        var best: (loop: Int, hole: Int, distance: Double)?
+        for (h, holePoint) in hole.enumerated() {
+            for (l, loopPoint) in loop.enumerated() {
+                let delta = loopPoint - holePoint
+                let distance = delta.x * delta.x + delta.y * delta.y
+                if let best, distance >= best.distance { continue }
+                guard !crosses(holePoint, loopPoint, ring: loop, skipping: l),
+                      !crosses(holePoint, loopPoint, ring: hole, skipping: h) else { continue }
+                best = (l, h, distance)
+            }
+        }
+        return best.map { ($0.loop, $0.hole) }
+    }
+
+    /// Whether segment a→b properly crosses any edge of `ring`, ignoring the
+    /// two edges that meet at the endpoint the segment starts or ends on.
+    private static func crosses(_ a: SIMD2<Double>, _ b: SIMD2<Double>, ring: Ring, skipping vertex: Int) -> Bool {
+        for i in 0..<ring.count {
+            let j = (i + 1) % ring.count
+            if i == vertex || j == vertex { continue }
+            if segmentsIntersect(a, b, ring[i], ring[j]) { return true }
+        }
+        return false
+    }
+
+    private static func segmentsIntersect(_ a: SIMD2<Double>, _ b: SIMD2<Double>,
+                                          _ c: SIMD2<Double>, _ d: SIMD2<Double>) -> Bool {
+        let d1 = cross(c, d, a), d2 = cross(c, d, b)
+        let d3 = cross(a, b, c), d4 = cross(a, b, d)
+        return ((d1 > 0) != (d2 > 0)) && ((d3 > 0) != (d4 > 0))
     }
 
     private static func signedArea(_ p: Ring) -> Double {
@@ -442,19 +519,64 @@ enum GlobeNodeFactory {
         under.scale = SCNVector3(s, s, s)
         node.addChildNode(under)
 
+        // Antarctica's triangles converge on the South Pole, where the under
+        // layer sits almost directly behind the cap and stops covering the
+        // T-junction cracks between them. A smooth cap under both shows the
+        // country's own colour through the cracks instead of ocean.
+        if let patch = polarPatch(code: code) {
+            patch.materials = [material]
+            node.addChildNode(SCNNode(geometry: patch))
+        }
+
         return node
+    }
+
+    /// A fine fan of rings around the pole a country reaches, between the
+    /// under layer and the ocean. Nil for every country but Antarctica.
+    private static func polarPatch(code: String) -> SCNGeometry? {
+        let lats = CountryGeometry.rings[code]?.flatMap { $0.map(\.y) } ?? []
+        guard let pole = lats.min(), pole <= -89.9 else { return nil }
+        let radius = (underCapRadius + oceanRadius) / 2 + 0.0005
+        // 11° of latitude: past the worst of the convergence, still well
+        // inside the ice shelves that the coastline is drawn around.
+        let steps = 10, spokes = 120, span = 11.0
+
+        var vertices: [SCNVector3] = [GlobeMath.vec3(lat: -90, lng: 0, radius: radius)]
+        for step in 1...steps {
+            let lat = -90 + span * Double(step) / Double(steps)
+            for spoke in 0..<spokes {
+                vertices.append(GlobeMath.vec3(lat: lat, lng: 360 * Double(spoke) / Double(spokes),
+                                               radius: radius))
+            }
+        }
+        var indices: [Int32] = []
+        for spoke in 0..<spokes {
+            let next = (spoke + 1) % spokes
+            indices += [0, Int32(1 + spoke), Int32(1 + next)]      // fan around the pole
+        }
+        for step in 1..<steps {
+            let inner = 1 + (step - 1) * spokes, outer = 1 + step * spokes
+            for spoke in 0..<spokes {
+                let next = (spoke + 1) % spokes
+                indices += [Int32(inner + spoke), Int32(outer + spoke), Int32(outer + next),
+                            Int32(inner + spoke), Int32(outer + next), Int32(inner + next)]
+            }
+        }
+        return SCNGeometry(sources: [SCNGeometrySource(vertices: vertices)],
+                           elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
     }
 
     /// Ear-clip + subdivide a country's rings into a reusable SCNGeometry mesh.
     /// nil if the country has no usable geometry.
     private static func buildMesh(code: String) -> Mesh? {
-        guard let rings = CountryGeometry.rings[code], !rings.isEmpty else { return nil }
+        let rings = CountryGeometry.ringsWithHoles(code)
+        guard !rings.isEmpty else { return nil }
 
         var vertices: [SCNVector3] = []
         var indices: [Int32] = []
 
         for ring in rings {
-            let loop = EarClip.cleaned(ring)
+            let loop = EarClip.cleaned(EarClip.merge(outer: ring.outer, holes: ring.holes))
             let tris = EarClip.triangulate(loop)
             guard tris.count >= 3 else { continue }
 

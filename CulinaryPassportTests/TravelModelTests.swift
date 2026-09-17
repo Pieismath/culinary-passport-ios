@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import CulinaryPassport
 
 final class TravelModelTests: XCTestCase {
@@ -56,6 +57,51 @@ final class TravelModelTests: XCTestCase {
         XCTAssertEqual(PlaceLocator.country(lat: 22.2855, lng: 114.1577), "HK") // Central
         XCTAssertEqual(PlaceLocator.country(lat: 1.2834, lng: 103.8607), "SG") // Marina Bay
         XCTAssertEqual(PlaceLocator.country(lat: 35.8989, lng: 14.5146), "MT") // Valletta
+    }
+
+    /// Each pair is metres-to-kilometres apart across a border a circle around
+    /// the small place could never see.
+    func testBorderTownsStayInTheirOwnCountry() {
+        let pairs: [(String, Double, Double, String)] = [
+            ("Lok Ma Chau", 22.5146, 114.0659, "HK"), ("Futian checkpoint", 22.5250, 114.0666, "CN"),
+            ("Shenzhen CBD", 22.5400, 114.0570, "CN"), ("Tsim Sha Tsui", 22.2950, 114.1720, "HK"),
+            ("Woodlands", 1.4450, 103.7690, "SG"), ("Johor Bahru", 1.4655, 103.7578, "MY"),
+            ("Legoland Malaysia", 1.4285, 103.6292, "MY"), ("Tuas", 1.3200, 103.6400, "SG"),
+            ("Senado Square", 22.1935, 113.5398, "MO"), ("Zhuhai Gongbei", 22.2240, 113.5480, "CN"),
+            ("Gibraltar town", 36.1408, -5.3536, "GI"), ("La Línea", 36.1650, -5.3480, "ES"),
+            ("Monte Carlo", 43.7395, 7.4280, "MC"), ("Beausoleil", 43.7450, 7.4240, "FR"),
+            ("Vaduz", 47.1410, 9.5215, "LI"), ("Buchs", 47.1680, 9.4780, "CH"),
+            ("Feldkirch", 47.2380, 9.5980, "AT"),
+            ("San Marino", 43.9360, 12.4460, "SM"), ("Rimini", 44.0600, 12.5700, "IT"),
+            ("Andorra la Vella", 42.5063, 1.5218, "AD"), ("La Seu d'Urgell", 42.3580, 1.4560, "ES"),
+            ("Piazza Navona", 41.8992, 12.4731, "IT"),
+            ("Philipsburg", 18.0260, -63.0450, "SX"), ("Marigot", 18.0680, -63.0830, "MF"),
+        ]
+        for (name, lat, lng, expected) in pairs {
+            XCTAssertEqual(PlaceLocator.country(lat: lat, lng: lng), expected, name)
+        }
+    }
+
+    func testIslandGroupsFarFromTheirCapitalStillResolve() {
+        let places: [(String, Double, Double, String)] = [
+            ("Vava'u", -18.6500, -173.9800, "TO"), ("Chuuk", 7.4500, 151.8500, "FM"),
+            ("Yap", 9.5100, 138.1300, "FM"), ("Kiritimati", 1.8700, -157.4000, "KI"),
+            ("Tarawa", 1.3300, 172.9800, "KI"), ("Nuku Hiva", -8.9000, -140.1000, "PF"),
+            ("Bora Bora", -16.5000, -151.7500, "PF"), ("Rodrigues", -19.7000, 63.4200, "MU"),
+            ("Cayman Brac", 19.7200, -79.8000, "KY"), ("Carriacou", 12.4800, -61.4500, "GD"),
+            ("Mayotte", -12.7800, 45.2300, "YT"), ("Grande Comore", -11.7000, 43.2500, "KM"),
+            ("Saba", 17.6300, -63.2400, "BQ"), ("Tortola", 18.4300, -64.6200, "VG"),
+            ("St John", 18.3300, -64.7400, "VI"), ("Addu Atoll", -0.6300, 73.1500, "MV"),
+        ]
+        for (name, lat, lng, expected) in places {
+            XCTAssertEqual(PlaceLocator.country(lat: lat, lng: lng), expected, name)
+        }
+    }
+
+    func testEveryPlaceTheLocatorCanReturnIsStampable() {
+        for code in Set(PlaceLocator.outlines.map(\.code) + PlaceLocator.islands.map(\.code)) {
+            XCTAssertNotNil(CountryStore.byCode[code], "\(code) resolves from photos but isn't in the passport")
+        }
     }
 
     func testInlandPhotosResolveToTheirCountry() {
@@ -244,8 +290,10 @@ final class AppModelTests: XCTestCase {
         var draft = MemoryDraft()
         draft.countryCode = "NO"
         draft.title = "Preikestolen"
+        let countriesBefore = app.stats.countries
         let result = try await app.saveMemory(draft, editing: nil, newPhotos: [], shareTo: [])
         XCTAssertTrue(result.isNewCountry)
+        XCTAssertEqual(result.countryNumber, countriesBefore + 1, "numbered among countries, not territories")
         XCTAssertTrue(app.visitedCodes.contains("NO"))
         XCTAssertEqual(app.memoriesByCountry["NO"]?.count, 1)
 
@@ -285,6 +333,97 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(app.visitedCodes.contains("DE"))
         XCTAssertEqual(app.stampsByCode["JP"]?.firstVisited, "2015-01-01")
         XCTAssertEqual(app.stampsByCode["JP"]?.lastVisited, "2024-04-12")
+    }
+
+    func testStampDatesFollowMemoryEdits() async throws {
+        let app = await signedInModel()
+        try await app.addStamps([StampInput(countryCode: "NO", firstVisited: "2019-06-01",
+                                            lastVisited: "2019-06-09", source: .photos)])
+        var draft = MemoryDraft()
+        draft.countryCode = "NO"
+        draft.title = "Lofoten"
+        draft.date = DayFormat.date(from: "2026-09-17")!
+        let saved = try await app.saveMemory(draft, editing: nil, newPhotos: [], shareTo: [])
+        await app.refreshStamps()
+        XCTAssertEqual(app.stampsByCode["NO"]?.lastVisited, "2026-09-17")
+
+        // Correcting the date narrows the range back — it no longer counts for 2026.
+        var fix = MemoryDraft(memory: saved.memory)
+        fix.date = DayFormat.date(from: "2019-06-05")!
+        _ = try await app.saveMemory(fix, editing: saved.memory, newPhotos: [], shareTo: [])
+        await app.refreshStamps()
+        XCTAssertEqual(app.stampsByCode["NO"]?.firstVisited, "2019-06-01")
+        XCTAssertEqual(app.stampsByCode["NO"]?.lastVisited, "2019-06-09")
+
+        // Deleting it keeps the photo stamp with the dates the photos gave.
+        let edited = try XCTUnwrap(app.memoriesByCountry["NO"]?.first)
+        try await app.deleteMemory(edited)
+        XCTAssertEqual(app.stampsByCode["NO"]?.source, .photos)
+        XCTAssertEqual(app.stampsByCode["NO"]?.lastVisited, "2019-06-09")
+    }
+
+    func testSaveWhoseResponseWasLostStillSucceedsOnce() async throws {
+        let app = await signedInModel()
+        let demo = try XCTUnwrap(app.backend as? DemoBackend)
+        var draft = MemoryDraft()
+        draft.countryCode = "IS"
+        draft.title = "Reynisfjara"
+        let jpeg = try XCTUnwrap(UIImage(systemName: "star")?.jpegData(compressionQuality: 0.5))
+        let before = app.memories.count
+
+        demo.nextWriteFault = .responseLost
+        let result = try await app.saveMemory(draft, editing: nil, newPhotos: [jpeg], shareTo: [])
+        XCTAssertEqual(app.memories.count, before + 1)
+        // The photo the saved row points at was not cleaned up as a failure.
+        let path = try XCTUnwrap(result.memory.photos.first)
+        let stored = try await demo.photoData(path: path)
+        XCTAssertEqual(stored, jpeg)
+    }
+
+    func testFailedSaveCleansUpItsUploadsAndRetriesWithTheSameId() async throws {
+        let app = await signedInModel()
+        let demo = try XCTUnwrap(app.backend as? DemoBackend)
+        var draft = MemoryDraft()
+        draft.countryCode = "IS"
+        draft.title = "Skógafoss"
+        let jpeg = try XCTUnwrap(UIImage(systemName: "star")?.jpegData(compressionQuality: 0.5))
+        let id = UUID()
+        let before = app.memories.count
+
+        demo.nextWriteFault = .beforeWrite
+        do {
+            _ = try await app.saveMemory(draft, editing: nil, newId: id, newPhotos: [jpeg], shareTo: [])
+            XCTFail("the write never landed")
+        } catch {
+            XCTAssertEqual(app.memories.count, before)
+        }
+        let saved = try await app.saveMemory(draft, editing: nil, newId: id, newPhotos: [jpeg], shareTo: [])
+        XCTAssertEqual(saved.memory.id, id)
+        XCTAssertEqual(app.memories.filter { $0.id == id }.count, 1)
+    }
+
+    func testDaysAreReadInTheGivenTimeZone() throws {
+        let instant = try XCTUnwrap(ISO8601DateFormatter().date(from: "2024-04-12T23:30:00Z"))
+        let tokyo = try XCTUnwrap(TimeZone(identifier: "Asia/Tokyo"))
+        let newYork = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        XCTAssertEqual(DayFormat.string(from: instant, in: tokyo), "2024-04-13")
+        XCTAssertEqual(DayFormat.string(from: instant, in: newYork), "2024-04-12")
+        // Alternating zones must not leave the shared calendar in the wrong one.
+        XCTAssertEqual(DayFormat.string(from: instant, in: tokyo), "2024-04-13")
+
+        XCTAssertEqual(DayFormat.string(from: try XCTUnwrap(DayFormat.date(from: "2024-02-29"))), "2024-02-29")
+        XCTAssertNil(DayFormat.date(from: "2023-02-29"))
+        XCTAssertNil(DayFormat.date(from: "not a date"))
+    }
+
+    func testExifCaptureTimeKeepsItsLocalDay() throws {
+        for id in ["America/Los_Angeles", "Asia/Tokyo", "Pacific/Kiritimati"] {
+            let zone = try XCTUnwrap(TimeZone(identifier: id))
+            let date = try XCTUnwrap(PhotoMetadata.exifDate("2024:04:12 08:03:55", in: zone))
+            XCTAssertEqual(DayFormat.string(from: date, in: zone), "2024-04-12", id)
+        }
+        XCTAssertNil(PhotoMetadata.exifDate("0000:00:00 00:00:00"))
+        XCTAssertNil(PhotoMetadata.exifDate("garbage"))
     }
 
     func testDeepLinks() async {

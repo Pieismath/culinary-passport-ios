@@ -32,8 +32,11 @@ actor ImagePipeline {
 
     private var backend: (any Backend)?
     private let memory = NSCache<NSString, UIImage>()
-    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+    private var inFlight: [String: Task<(data: Data?, image: UIImage?), Never>] = [:]
     private let directory: URL
+    /// Bumped by `clearAll`. A download that started before a sign-out must
+    /// not write the previous account's photos into the fresh cache.
+    private var generation = 0
 
     init() {
         memory.totalCostLimit = 120 * 1024 * 1024
@@ -57,22 +60,25 @@ actor ImagePipeline {
         let size = Self.sizeBucket(maxPixel)
         let key = "\(source.cacheKey)@\(size)"
         if let hit = memory.object(forKey: key as NSString) { return hit }
-        if let pending = inFlight[key] { return await pending.value }
+        if let pending = inFlight[key] { return await pending.value.image }
 
         let file = file(for: source)
         let backend = backend
-        let task = Task<UIImage?, Never>.detached(priority: .userInitiated) {
-            var data = try? Data(contentsOf: file)
-            if data == nil {
-                data = await Self.fetch(source, backend: backend)
-                if let data { try? data.write(to: file, options: .atomic) }
+        let generation = generation
+        // Caching is the actor's job, not the task's: by the time bytes
+        // arrive the account may have changed underneath them.
+        let task = Task<(data: Data?, image: UIImage?), Never>.detached(priority: .userInitiated) {
+            if let cached = try? Data(contentsOf: file) {
+                return (nil, Self.downsample(cached, maxPixel: size))
             }
-            guard let data else { return nil }
-            return Self.downsample(data, maxPixel: size)
+            guard let data = await Self.fetch(source, backend: backend) else { return (nil, nil) }
+            return (data, Self.downsample(data, maxPixel: size))
         }
         inFlight[key] = task
-        let image = await task.value
-        inFlight[key] = nil
+        let (fresh, image) = await task.value
+        if inFlight[key] == task { inFlight[key] = nil }
+        guard generation == self.generation else { return nil }
+        if let fresh { try? fresh.write(to: file, options: .atomic) }
         if let image {
             let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
             memory.setObject(image, forKey: key as NSString, cost: cost)
@@ -99,6 +105,8 @@ actor ImagePipeline {
     }
 
     func clearAll() {
+        generation += 1
+        inFlight.removeAll()
         memory.removeAllObjects()
         try? FileManager.default.removeItem(at: directory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -152,11 +160,15 @@ struct RemoteImage<Placeholder: View>: View {
     @ViewBuilder var placeholder: () -> Placeholder
 
     @State private var image: UIImage?
+    /// Which source `image` came from. A recycled row (or a deleted photo)
+    /// hands us a new source while the old download is still running; without
+    /// this the wrong photo stays on screen.
+    @State private var shown: ImageSource?
 
     var body: some View {
         Color.clear
             .overlay {
-                if let image {
+                if let image, shown == source {
                     Image(uiImage: image)
                         .resizable()
                         .aspectRatio(contentMode: contentMode)
@@ -167,9 +179,18 @@ struct RemoteImage<Placeholder: View>: View {
             }
             .clipped()
             .task(id: source) {
-                guard let source else { image = nil; return }
+                guard let source else {
+                    image = nil
+                    shown = nil
+                    return
+                }
+                guard shown != source else { return }
                 let loaded = await ImagePipeline.shared.image(for: source, maxPixel: maxPixel)
-                withAnimation(.easeOut(duration: 0.18)) { image = loaded }
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.18)) {
+                    image = loaded
+                    shown = source
+                }
             }
     }
 }

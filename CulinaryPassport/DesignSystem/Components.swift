@@ -371,6 +371,54 @@ extension View {
     }
 }
 
+/// Toasts live in their own window above every sheet and cover. Hosted on
+/// the root view they were drawn *behind* any presented sheet, so errors and
+/// confirmations raised from sheets ("Code copied", a failed delete) were
+/// never seen. The window never takes touches or key status.
+@MainActor
+final class ToastWindow {
+    static let shared = ToastWindow()
+    private var window: UIWindow?
+
+    func install(app: AppModel) {
+        guard window == nil,
+              let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState != .unattached }) else { return }
+        let host = PassiveHostingController(rootView: ToastOverlay().environment(app))
+        host.view.backgroundColor = .clear
+        let window = PassthroughWindow(windowScene: scene)
+        window.windowLevel = .alert + 1
+        window.backgroundColor = .clear
+        window.rootViewController = host
+        window.isHidden = false
+        self.window = window
+    }
+}
+
+private struct ToastOverlay: View {
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        @Bindable var app = app
+        Color.clear
+            .ignoresSafeArea()
+            .toastHost($app.toast)
+            .tint(Color.brand)
+    }
+}
+
+/// Touches fall through to the app underneath.
+private final class PassthroughWindow: UIWindow {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+}
+
+/// Doesn't claim the status bar or orientation from the real window.
+private final class PassiveHostingController<Content: View>: UIHostingController<Content> {
+    override var preferredStatusBarStyle: UIStatusBarStyle { .default }
+    override var prefersStatusBarHidden: Bool { false }
+}
+
 // ── Identity ────────────────────────────────────────────────────────────────
 
 /// Circular profile photo with an initial-on-color fallback.

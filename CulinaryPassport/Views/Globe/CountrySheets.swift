@@ -144,6 +144,10 @@ struct CountryChecklistView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var checked: Set<String> = []
+    /// What was stamped when the list opened. Removals are diffed against
+    /// this, not the live set, so a stamp that lands while the list is open
+    /// (e.g. the home country from onboarding) is never deleted by Save.
+    @State private var initial: Set<String> = []
     @State private var loaded = false
     @State private var saving = false
     @State private var celebrate: [String]?
@@ -151,14 +155,14 @@ struct CountryChecklistView: View {
     private var locked: Set<String> { Set(app.memoriesByCountry.keys) }
 
     private var added: [String] { checked.subtracting(app.visitedCodes).sorted() }
-    private var removed: [String] { app.visitedCodes.subtracting(checked).subtracting(locked).sorted() }
+    private var removed: [String] { initial.subtracting(checked).subtracting(locked).sorted() }
 
     var body: some View {
         List {
             Section {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(checked.filter { CountryStore.byCode[$0]?.isSovereign == true }.count) countries")
+                        Text(checked.filter { CountryStore.byCode[$0]?.isSovereign == true }.count.counted("country", "countries"))
                             .font(.number(.title2))
                             .contentTransition(.numericText())
                         Text("of \(CountryStore.sovereignCount) · tap to stamp")
@@ -193,7 +197,7 @@ struct CountryChecklistView: View {
         .navigationTitle("Where have you been?")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss(); onDone() } }
+            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { onDone() } }
             ToolbarItem(placement: .confirmationAction) {
                 Button(saving ? "Saving…" : "Save") { Task { await save() } }
                     .fontWeight(.semibold)
@@ -203,17 +207,16 @@ struct CountryChecklistView: View {
         .onAppear {
             guard !loaded else { return }
             checked = app.visitedCodes
+            initial = app.visitedCodes
             loaded = true
         }
         .fullScreenCover(item: Binding(
             get: { celebrate.map { StampBurst(codes: $0) } },
             set: { if $0 == nil { celebrate = nil } }
         )) { burst in
-            StampMomentView(codes: burst.codes) {
-                celebrate = nil
-                dismiss()
-                onDone()
-            }
+            // The presenter's onDone closes this sheet (and the cover on it)
+            // in one step — no competing dismissals.
+            StampMomentView(codes: burst.codes) { onDone() }
         }
     }
 
@@ -249,22 +252,25 @@ struct CountryChecklistView: View {
     }
 
     private func save() async {
+        // Capture the diff first: addStamps updates visitedCodes, after which
+        // `added` is empty and the celebration never played.
+        let toAdd = added
+        let toRemove = removed
         saving = true
         defer { saving = false }
         do {
-            if !added.isEmpty {
-                try await app.addStamps(added.map {
+            if !toAdd.isEmpty {
+                try await app.addStamps(toAdd.map {
                     StampInput(countryCode: $0, firstVisited: nil, lastVisited: nil, source: .manual)
                 })
             }
-            for code in removed {
+            for code in toRemove {
                 try await app.removeStamp(code)
             }
-            if added.isEmpty {
-                dismiss()
+            if toAdd.isEmpty {
                 onDone()
             } else {
-                celebrate = added
+                celebrate = toAdd
             }
         } catch {
             app.show(error)

@@ -37,7 +37,6 @@ struct StampdApp: App {
             }
             .environment(app)
             .tint(Color.brand)
-            .toastHost($app.toast)
             .onOpenURL { url in
                 // The password-reset email links back here; only that link
                 // opens "set a new password" (an OAuth callback also yields a
@@ -60,6 +59,7 @@ struct StampdApp: App {
             }
             .task {
                 app.start()
+                ToastWindow.shared.install(app: app)
                 if let url = DeepLinkInbox.take() { app.handle(url: url) }
             }
         }

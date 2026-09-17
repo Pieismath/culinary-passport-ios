@@ -121,6 +121,7 @@ struct MemoryDetailView: View {
             }
             .overlay { if deleting { SavingOverlay(text: "Deleting…") } }
             .task { await load() }
+            .task(id: current) { if isMine { await renderPostcard() } }
             .onChange(of: app.memories) { _, mine in
                 // Pick up edits made from the editor sheet.
                 if let fresh = mine.first(where: { $0.id == current.id }) { current = fresh }
@@ -155,7 +156,6 @@ struct MemoryDetailView: View {
         _ = await app.profiles(for: [current.userId])
         reactions = (try? await app.backend.reactions(memoryIds: [current.id])) ?? []
         _ = await app.profiles(for: reactions.map(\.userId))
-        if isMine { await renderPostcard() }
     }
 
     private func react(_ emoji: String, on: Bool) async {

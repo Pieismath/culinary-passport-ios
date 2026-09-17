@@ -20,6 +20,9 @@ struct OnboardingView: View {
     @State private var joinCode = ""
     @State private var joining = false
     @State private var loaded = false
+    /// Stamps before a scan/checklist opened — the home country is stamped on
+    /// Continue, so "any stamps" can't mean "they built their passport".
+    @State private var stampBaseline = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,7 +54,7 @@ struct OnboardingView: View {
             NavigationStack {
                 PhotoImportView(onDone: {
                     showImport = false
-                    if !app.stamps.isEmpty { step = .friends }
+                    if app.stamps.count > stampBaseline { step = .friends }
                 })
             }
         }
@@ -59,7 +62,7 @@ struct OnboardingView: View {
             NavigationStack {
                 CountryChecklistView(onDone: {
                     showChecklist = false
-                    if !app.stamps.isEmpty { step = .friends }
+                    if app.stamps.count > stampBaseline { step = .friends }
                 })
             }
         }
@@ -169,12 +172,14 @@ struct OnboardingView: View {
                            title: "Scan my photos",
                            detail: "Finds the countries in your camera roll in seconds. On your phone — nothing is uploaded.",
                            badge: "Fastest") {
+                    stampBaseline = app.stamps.count
                     showImport = true
                 }
                 optionCard(icon: "checklist",
                            title: "Pick countries",
                            detail: "Tap the places you've been, continent by continent.",
                            badge: nil) {
+                    stampBaseline = app.stamps.count
                     showChecklist = true
                 }
 

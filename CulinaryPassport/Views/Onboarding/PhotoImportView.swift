@@ -42,10 +42,7 @@ struct PhotoImportView: View {
             get: { celebrate.map { StampBurst(codes: $0) } },
             set: { if $0 == nil { celebrate = nil } }
         )) { burst in
-            StampMomentView(codes: burst.codes) {
-                celebrate = nil
-                finish()
-            }
+            StampMomentView(codes: burst.codes) { finish() }
         }
         .onChange(of: scanner.phase) { _, phase in
             if phase == .finished {
@@ -294,8 +291,10 @@ struct PhotoImportView: View {
         }
     }
 
+    /// The presenter's onDone closes the sheet (and any cover on it) in one
+    /// step; a running scan is cancelled first.
     private func finish() {
-        dismiss()
+        scanner.cancel()
         onDone()
     }
 }

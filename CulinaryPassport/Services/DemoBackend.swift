@@ -11,6 +11,8 @@ final class DemoBackend: Backend {
     private var profilesById: [UUID: Profile] = [:]
     private var memoriesById: [UUID: Memory] = [:]
     private var stampsByKey: [String: Stamp] = [:]
+    /// Dates given directly (import/checklist), like stamps.stamped_first/last.
+    private var stampedDates: [String: (first: String?, last: String?)] = [:]
     private var bucket: Set<String> = []
     private var follows: Set<[UUID]> = []            // [follower, followee]
     private var blocked: Set<UUID> = []
@@ -24,6 +26,18 @@ final class DemoBackend: Backend {
     private var uploaded: [String: Data] = [:]
     /// Simulated round trip, so loading states are exercised.
     var latency: Duration = .milliseconds(120)
+
+    /// Tests: make the next memory write fail before it lands, or land and
+    /// then lose its response (a timeout on bad Wi-Fi).
+    enum WriteFault { case beforeWrite, responseLost }
+    var nextWriteFault: WriteFault?
+
+    private func takeFault() -> WriteFault? {
+        sync {
+            defer { nextWriteFault = nil }
+            return nextWriteFault
+        }
+    }
 
     init(seed: Bool = true) {
         if seed { DemoData.seed(into: self) }
@@ -45,7 +59,14 @@ final class DemoBackend: Backend {
             stampFromMemoryLocked(m)
         }
     }
-    func seedStamp(_ s: Stamp) { sync { stampsByKey["\(s.userId)|\(s.countryCode)"] = s } }
+    func seedStamp(_ s: Stamp) {
+        sync {
+            let key = "\(s.userId)|\(s.countryCode)"
+            stampsByKey[key] = s
+            stampedDates[key] = (s.firstVisited, s.lastVisited)
+            refitStampLocked(user: s.userId, code: s.countryCode)
+        }
+    }
     func seedFollow(_ follower: UUID, _ followee: UUID) { sync { _ = follows.insert([follower, followee]) } }
     func seedBucket(_ codes: [String]) { sync { bucket.formUnion(codes) } }
     func seedReaction(_ r: Reaction) { sync { reactions.append(r) } }
@@ -87,22 +108,35 @@ final class DemoBackend: Backend {
 
     private func stampFromMemoryLocked(_ m: Memory) {
         let key = "\(m.userId)|\(m.countryCode)"
-        if var existing = stampsByKey[key] {
-            existing.firstVisited = min(existing.firstVisited ?? m.date, m.date)
-            existing.lastVisited = max(existing.lastVisited ?? m.date, m.date)
-            stampsByKey[key] = existing
-        } else {
+        if stampsByKey[key] == nil {
             stampsByKey[key] = Stamp(userId: m.userId, countryCode: m.countryCode,
-                                     firstVisited: m.date, lastVisited: m.date,
+                                     firstVisited: nil, lastVisited: nil,
                                      source: .memory, createdAt: m.createdAt)
         }
+        refitStampLocked(user: m.userId, code: m.countryCode)
     }
 
     private func dropMemoryOnlyStampLocked(user: UUID, code: String, except id: UUID) {
         let key = "\(user)|\(code)"
-        guard stampsByKey[key]?.source == .memory else { return }
         let others = memoriesById.values.contains { $0.userId == user && $0.countryCode == code && $0.id != id }
-        if !others { stampsByKey[key] = nil }
+        if !others, stampsByKey[key]?.source == .memory {
+            stampsByKey[key] = nil
+            stampedDates[key] = nil
+        }
+        refitStampLocked(user: user, code: code)
+    }
+
+    /// Visible range = dates given directly ∪ memories there (refit_stamp_dates).
+    private func refitStampLocked(user: UUID, code: String) {
+        let key = "\(user)|\(code)"
+        guard var stamp = stampsByKey[key] else { return }
+        let days = memoriesById.values
+            .filter { $0.userId == user && $0.countryCode == code }
+            .map { String($0.date.prefix(10)) }
+        let given = stampedDates[key]
+        stamp.firstVisited = ([given?.first].compactMap { $0 } + days).min()
+        stamp.lastVisited = ([given?.last].compactMap { $0 } + days).max()
+        stampsByKey[key] = stamp
     }
 
     // ── Session ──────────────────────────────────────────────────────────────
@@ -197,20 +231,28 @@ final class DemoBackend: Backend {
 
     func insertMemory(_ new: NewMemory) async throws -> Memory {
         await wait()
-        let memory = Memory(id: UUID(), userId: me, countryCode: new.countryCode, title: new.title,
+        let memory = Memory(id: new.id, userId: me, countryCode: new.countryCode, title: new.title,
                             city: new.city, date: new.dateTried, notes: new.notes, photos: new.photos,
                             lat: new.lat, lng: new.lng,
                             visibility: Visibility(rawValue: new.visibility) ?? .friends, createdAt: Date())
-        sync {
+        let fault = takeFault()
+        if fault == .beforeWrite { throw URLError(.notConnectedToInternet) }
+        try sync {
+            guard memoriesById[memory.id] == nil else {
+                throw AppError("duplicate key value violates unique constraint \"entries_pkey\"")
+            }
             memoriesById[memory.id] = memory
             stampFromMemoryLocked(memory)
         }
+        if fault == .responseLost { throw URLError(.timedOut) }
         return memory
     }
 
     func updateMemory(id: UUID, _ patch: MemoryPatch) async throws -> Memory {
         await wait()
-        return try sync {
+        let fault = takeFault()
+        if fault == .beforeWrite { throw URLError(.notConnectedToInternet) }
+        let updated: Memory = try sync {
             guard var memory = memoriesById[id], memory.userId == me else {
                 throw AppError("That memory is gone.")
             }
@@ -231,6 +273,8 @@ final class DemoBackend: Backend {
             stampFromMemoryLocked(memory)
             return memory
         }
+        if fault == .responseLost { throw URLError(.timedOut) }
+        return updated
     }
 
     func deleteMemory(_ memory: Memory) async throws {
@@ -283,23 +327,30 @@ final class DemoBackend: Backend {
         sync {
             for item in items {
                 let key = "\(me)|\(item.countryCode)"
+                let given = stampedDates[key]
+                stampedDates[key] = (
+                    [given?.first, item.firstVisited].compactMap { $0 }.min(),
+                    [given?.last, item.lastVisited].compactMap { $0 }.max()
+                )
                 if var existing = stampsByKey[key] {
-                    if let f = item.firstVisited { existing.firstVisited = min(existing.firstVisited ?? f, f) }
-                    if let l = item.lastVisited { existing.lastVisited = max(existing.lastVisited ?? l, l) }
                     if existing.source == .memory { existing.source = item.source }
                     stampsByKey[key] = existing
                 } else {
                     stampsByKey[key] = Stamp(userId: me, countryCode: item.countryCode,
-                                             firstVisited: item.firstVisited, lastVisited: item.lastVisited,
+                                             firstVisited: nil, lastVisited: nil,
                                              source: item.source, createdAt: Date())
                 }
+                refitStampLocked(user: me, code: item.countryCode)
             }
         }
     }
 
     func removeStamp(countryCode: String) async throws {
         await wait()
-        sync { stampsByKey["\(me)|\(countryCode)"] = nil }
+        sync {
+            stampsByKey["\(me)|\(countryCode)"] = nil
+            stampedDates["\(me)|\(countryCode)"] = nil
+        }
     }
 
     func bucketList() async throws -> Set<String> { sync { bucket } }

@@ -32,9 +32,19 @@ struct PhotoMetadata: Equatable {
         let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any]
         let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
         if let raw = (exif?[kCGImagePropertyExifDateTimeOriginal] ?? tiff?[kCGImagePropertyTIFFDateTime]) as? String {
-            meta.date = exifFormatter.date(from: raw)
+            meta.date = exifDate(raw)
         }
         return meta
+    }
+
+    /// "2024:04:12 08:03:55" is the clock on the wall where the photo was
+    /// taken, with no zone. Read it in the device's zone so it lands on the
+    /// same calendar day here — 12 April in Tokyo stays 12 April in New York.
+    static func exifDate(_ raw: String, in zone: TimeZone = .current) -> Date? {
+        let fields = raw.split(whereSeparator: { ":- T".contains($0) }).prefix(6).compactMap { Int($0) }
+        guard fields.count == 6 else { return nil }
+        return DayFormat.date(year: fields[0], month: fields[1], day: fields[2],
+                              hour: fields[3], minute: fields[4], second: fields[5], in: zone)
     }
 
     /// Richer metadata from the Photos library when we have access and an
@@ -46,53 +56,6 @@ struct PhotoMetadata: Equatable {
         return PhotoMetadata(latitude: asset.location?.coordinate.latitude,
                              longitude: asset.location?.coordinate.longitude,
                              date: asset.creationDate)
-    }
-
-    private static let exifFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.calendar = Calendar(identifier: .gregorian)
-        f.timeZone = .current
-        f.dateFormat = "yyyy:MM:dd HH:mm:ss"
-        return f
-    }()
-}
-
-/// Point → stampable place, tuned for photo locations rather than globe taps:
-/// small places (Singapore, Vatican City, Hong Kong…) win within their radius
-/// — they sit inside or beside big polygons — and coastal shots just off the
-/// coarse 110m shoreline snap to the nearest country within a few kilometres.
-enum PlaceLocator {
-    /// Rough radius (km) around each small place's centroid.
-    private static let radiusKm: [String: Double] = [
-        "VA": 1, "MC": 3, "GI": 4, "SM": 8, "MO": 9, "SX": 12, "LI": 13, "JE": 13, "GG": 13, "AD": 16,
-        "NR": 10, "AW": 22, "BB": 25, "LC": 26, "SG": 26, "MT": 28, "KN": 28, "BM": 28, "BH": 32,
-        "HK": 34, "GD": 32, "IM": 32, "GU": 32, "DM": 32, "CW": 36, "AG": 42, "VI": 42, "VG": 32,
-        "MQ": 42, "BQ": 55, "VC": 55, "KY": 65, "GP": 65, "RE": 65, "AS": 65, "AX": 70, "FO": 80,
-        "TC": 90, "WS": 100, "PW": 130, "MU": 130, "MP": 160, "ST": 160, "KM": 170, "CV": 260,
-        "SJ": 280, "TO": 280, "SC": 320, "TV": 380, "MV": 500, "KI": 520, "MH": 600, "FM": 650,
-        "CK": 700, "PF": 800,
-    ]
-
-    private static let small: [(code: String, lat: Double, lng: Double, radius: Double)] =
-        CountryStore.markers.compactMap { country in
-            radiusKm[country.code].map { (country.code, country.centroid.lat, country.centroid.lng, $0) }
-        }
-
-    static func country(lat: Double, lng: Double, coastalSnapKm: Double = 12) -> String? {
-        var best: (code: String, fit: Double)?
-        for place in small {
-            // Cheap bounding check before the trig.
-            guard abs(place.lat - lat) < place.radius / 100 + 0.5 else { continue }
-            let d = Geo.distanceKm(lat, lng, place.lat, place.lng)
-            if d <= place.radius {
-                let fit = d / place.radius
-                if best == nil || fit < best!.fit { best = (place.code, fit) }
-            }
-        }
-        if let best { return best.code }
-        if let code = CountryGeometry.country(atLat: lat, lng: lng) { return code }
-        return CountryGeometry.nearestCountry(atLat: lat, lng: lng, withinKm: coastalSnapKm)
     }
 }
 
@@ -120,6 +83,7 @@ final class PhotoLibraryScanner {
     }
 
     var phase: Phase = .idle
+    private let cancellation = ScanCancellation()
     var scanned = 0
     var total = 0
     var found: [Found] = []
@@ -142,8 +106,9 @@ final class PhotoLibraryScanner {
         phase = .scanning
         scanned = 0
         found = []
+        let cancellation = cancellation
         let results = await Task.detached(priority: .userInitiated) { [weak self] in
-            Self.scanLibrary { done, total, snapshot in
+            Self.scanLibrary(cancellation: cancellation) { done, total, snapshot in
                 Task { @MainActor in
                     // Progress hops can land after the final result; never
                     // let a stale snapshot overwrite it.
@@ -185,9 +150,15 @@ final class PhotoLibraryScanner {
         phase = .finished
     }
 
-    /// Walks the library oldest → newest. Locations are bucketed into ~5 km
+    /// Stop a scan in progress (the user left the screen).
+    func cancel() {
+        cancellation.cancel()
+    }
+
+    /// Walks the library oldest → newest. Locations are bucketed into small
     /// cells so the polygon test runs once per place, not once per photo.
-    nonisolated static func scanLibrary(progress: @escaping (Int, Int, [Found]) -> Void) -> [Found] {
+    nonisolated static func scanLibrary(cancellation: ScanCancellation = ScanCancellation(),
+                                        progress: @escaping (Int, Int, [Found]) -> Void) -> [Found] {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
@@ -214,14 +185,23 @@ final class PhotoLibraryScanner {
             .sorted { $0.photoCount > $1.photoCount }
         }
 
-        assets.enumerateObjects { asset, index, _ in
-            if index % 400 == 0 { progress(index, total, snapshot()) }
+        assets.enumerateObjects { asset, index, stop in
+            if index % 400 == 0 {
+                if cancellation.isCancelled {
+                    stop.pointee = true
+                    return
+                }
+                progress(index, total, snapshot())
+            }
             guard let location = asset.location else { return }
             let lat = location.coordinate.latitude
             let lng = location.coordinate.longitude
             guard CLLocationCoordinate2DIsValid(location.coordinate), !(lat == 0 && lng == 0) else { return }
 
-            let cell = Int64((lat * 20).rounded()) * 10_000 + Int64((lng * 20).rounded())
+            // ~500 m cells. The old 5 km cell let the first photo in a square
+            // decide the country for every later one there, so one shot in
+            // Rome could keep every Vatican photo out of the Vatican.
+            let cell = Int64((lat * 200).rounded()) * 1_000_000 + Int64((lng * 200).rounded())
             let code: String
             if let cached = cellCache[cell] {
                 code = cached
@@ -252,6 +232,7 @@ final class PhotoLibraryScanner {
         }
 
         let results = snapshot()
+        guard !cancellation.isCancelled else { return results }
         LocalPhotoIndex.save(byCode.mapValues { sample($0.ids, count: 120) })
         progress(total, total, results)
         return results
@@ -262,6 +243,21 @@ final class PhotoLibraryScanner {
         guard ids.count > count else { return ids }
         let step = Double(ids.count - 1) / Double(count - 1)
         return (0..<count).map { ids[Int((Double($0) * step).rounded())] }
+    }
+}
+
+/// Thread-safe stop flag shared with the background scan.
+final class ScanCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return cancelled
+    }
+
+    func cancel() {
+        lock.lock(); cancelled = true; lock.unlock()
     }
 }
 
@@ -327,9 +323,12 @@ enum LocalAssets {
             }
         }
         guard let data else { return nil }
-        let meta = PhotoMetadata(latitude: asset.location?.coordinate.latitude,
-                                 longitude: asset.location?.coordinate.longitude,
-                                 date: asset.creationDate)
+        // The capture clock from EXIF names the local day; creationDate is an
+        // instant, which lands on the wrong day when read in another zone.
+        let exif = PhotoMetadata.read(from: data)
+        let meta = PhotoMetadata(latitude: asset.location?.coordinate.latitude ?? exif.latitude,
+                                 longitude: asset.location?.coordinate.longitude ?? exif.longitude,
+                                 date: exif.date ?? asset.creationDate)
         return (data, meta)
     }
 }

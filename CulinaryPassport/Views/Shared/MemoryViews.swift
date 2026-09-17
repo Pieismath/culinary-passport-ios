@@ -18,7 +18,9 @@ struct PhotoPager: View {
                 StoragePhoto(path: memory.photos[0], maxPixel: maxPixel)
             } else {
                 TabView(selection: $page) {
-                    ForEach(Array(memory.photos.enumerated()), id: \.offset) { index, path in
+                    // Keyed by path: editing a memory's photos must not hand
+                    // an existing page a different photo.
+                    ForEach(Array(memory.photos.enumerated()), id: \.element) { index, path in
                         StoragePhoto(path: path, maxPixel: maxPixel).tag(index)
                     }
                 }

@@ -292,6 +292,7 @@ struct GroupHomeView: View {
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.86), value: selected)
+        .onChange(of: lens) { focusMember = nil }
         .navigationTitle(group?.name ?? "Group")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

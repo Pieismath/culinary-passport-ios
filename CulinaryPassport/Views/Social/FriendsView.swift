@@ -95,12 +95,15 @@ struct FriendsView: View {
                     onOpenAuthor: { profileId = memory.userId },
                     onReact: { emoji, on in Task { await feed.react(memory.id, emoji: emoji, on: on, app: app) } }
                 )
-                .onAppear {
-                    if memory.id == feed.items.last?.id { Task { await feed.loadMore(app: app) } }
-                }
             }
-            if feed.loadingMore {
-                ProgressView().padding()
+            // Paging sentinel. Keyed by page size so it re-appears after each
+            // load; watching the last *item* stalled when that item was
+            // filtered out (blocked author, private profile in Discover).
+            if !feed.exhausted {
+                ProgressView()
+                    .padding()
+                    .id(feed.items.count)
+                    .onAppear { Task { await feed.loadMore(app: app) } }
             }
         }
     }

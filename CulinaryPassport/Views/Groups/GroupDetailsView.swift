@@ -15,6 +15,7 @@ struct GroupDetailsView: View {
     @State private var busy = false
     @State private var confirmLeave = false
     @State private var confirmDelete = false
+    @State private var loadedName = false
 
     private var current: Group { app.groups.first { $0.id == group.id } ?? group }
     private var isOwner: Bool { app.myId == current.createdBy }
@@ -90,7 +91,7 @@ struct GroupDetailsView: View {
                     }
                 }
 
-                Section("\(app.members(of: current.id).count) members") {
+                Section(app.members(of: current.id).count.counted("member")) {
                     ForEach(app.members(of: current.id), id: \.self) { id in
                         NavigationLink {
                             ProfileView(userId: id)
@@ -127,7 +128,13 @@ struct GroupDetailsView: View {
             .navigationTitle("Group details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .onAppear { name = current.name }
+            .onAppear {
+                // Once: returning from a member's profile must not wipe an
+                // unsaved rename.
+                guard !loadedName else { return }
+                loadedName = true
+                name = current.name
+            }
             .onChange(of: pickedItem) { Task { await uploadPhoto() } }
             .confirmationDialog("Leave \(current.name)?", isPresented: $confirmLeave, titleVisibility: .visible) {
                 Button("Leave", role: .destructive) { Task { await leave() } }

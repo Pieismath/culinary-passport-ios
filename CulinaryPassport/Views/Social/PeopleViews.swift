@@ -296,7 +296,7 @@ struct ProfileView: View {
 
     private var stampsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionHeader("Stamps", subtitle: "\(stamps.count) places")
+            SectionHeader("Stamps", subtitle: stamps.count.counted("place"))
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
                     ForEach(stamps.sorted { ($0.firstVisited ?? "") > ($1.firstVisited ?? "") }) { stamp in

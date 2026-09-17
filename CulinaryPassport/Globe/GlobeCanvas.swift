@@ -459,10 +459,12 @@ struct GlobeCanvas: UIViewRepresentable {
 
         func focus(on code: String, style: FocusRequest.Style, onLanded: ((String?) -> Void)?) {
             guard let country = CountryStore.byCode[code] else {
-                onLanded?(nil)
+                announce { onLanded?(nil) }
                 return
             }
-            cancelDrive()
+            // This flight replaces the one in progress and will report its own
+            // landing, so the old one stays quiet.
+            cancelDrive(announcing: false)
 
             let toPitch = Float(country.centroid.lat * .pi / 180)
             var toYaw = yaw + shortestDelta(from: yaw, to: Float(-country.centroid.lng * .pi / 180))
@@ -511,12 +513,20 @@ struct GlobeCanvas: UIViewRepresentable {
             return delta
         }
 
-        private func cancelDrive() {
-            if case let .animate(_, _, _, _, _, _, _, _, _, _, onLanded) = drive {
-                onLanded?(nil)
+        /// Stop any flight. `announcing` tells the caller it never landed —
+        /// unless another flight is taking over.
+        private func cancelDrive(announcing: Bool = true) {
+            if case let .animate(_, _, _, _, _, _, _, _, _, _, onLanded) = drive, announcing {
+                announce { onLanded?(nil) }
             }
             drive = .idle
             displayLink?.isPaused = true
+        }
+
+        /// Landing callbacks change SwiftUI state, and cancelDrive can run
+        /// inside updateUIView (a new focus request arriving mid-flight).
+        private func announce(_ body: @escaping () -> Void) {
+            DispatchQueue.main.async(execute: body)
         }
 
         // ── Markers keep a constant on-screen size ───────────────────────────

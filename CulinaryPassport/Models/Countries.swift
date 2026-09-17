@@ -75,8 +75,11 @@ enum CountryStore {
         all.filter { $0.continent == continent }
     }
 
-    // Natural Earth 110m sets ISO_A2 = -99 for these.
-    static let isoFix = ["France": "FR", "Norway": "NO", "Kosovo": "XK"]
+    // Natural Earth 110m sets ISO_A2 = -99 for these. Somaliland and Northern
+    // Cyprus are drawn as part of the country they're internationally
+    // recognised in — otherwise they'd be holes of ocean on the globe.
+    static let isoFix = ["France": "FR", "Norway": "NO", "Kosovo": "XK",
+                         "Somaliland": "SO", "Northern Cyprus": "CY"]
 
     /// Non-sovereign polygons in the 110m data.
     private static let territoryShapes: Set<String> = ["GL", "PR", "NC", "FK", "TF", "EH", "AQ"]
@@ -104,6 +107,8 @@ enum CountryStore {
         "LA": ["Lao"], "IR": ["Persia"], "BO": ["Bolivia"], "HK": ["Hong Kong SAR"],
         "MO": ["Macao"], "FM": ["Micronesia"], "KN": ["St Kitts"], "LC": ["St Lucia"],
         "VC": ["St Vincent"], "ST": ["Sao Tome"], "BQ": ["Bonaire"], "SX": ["St Maarten"],
+        "MF": ["St Martin", "Saint-Martin"], "BL": ["St Barts", "St Barths", "Saint-Barth"],
+        "PM": ["St Pierre"], "SJ": ["Svalbard", "Spitsbergen"], "GP": ["Guadeloupe"],
     ]
 
     /// (code, name, lat, lng, continent, subregion, sovereign)
@@ -139,10 +144,12 @@ enum CountryStore {
         ("VC", "Saint Vincent and the Grenadines", 13.25, -61.20, .northAmerica, "Caribbean", true),
         ("WS", "Samoa", -13.76, -172.10, .oceania, "Polynesia", true),
         // Territories people travel to and count
+        ("AI", "Anguilla", 18.22, -63.05, .northAmerica, "Caribbean", false),
         ("AW", "Aruba", 12.52, -69.97, .northAmerica, "Caribbean", false),
         ("AS", "American Samoa", -14.27, -170.70, .oceania, "Polynesia", false),
         ("AX", "Åland Islands", 60.18, 19.92, .europe, "Northern Europe", false),
         ("BM", "Bermuda", 32.31, -64.75, .northAmerica, "Northern America", false),
+        ("BL", "Saint Barthélemy", 17.90, -62.83, .northAmerica, "Caribbean", false),
         ("BQ", "Caribbean Netherlands", 12.18, -68.26, .northAmerica, "Caribbean", false),
         ("CK", "Cook Islands", -21.24, -159.78, .oceania, "Polynesia", false),
         ("CW", "Curaçao", 12.17, -68.99, .northAmerica, "Caribbean", false),
@@ -155,16 +162,22 @@ enum CountryStore {
         ("IM", "Isle of Man", 54.24, -4.55, .europe, "Northern Europe", false),
         ("JE", "Jersey", 49.21, -2.13, .europe, "Northern Europe", false),
         ("KY", "Cayman Islands", 19.31, -81.25, .northAmerica, "Caribbean", false),
+        ("MF", "Saint Martin", 18.08, -63.06, .northAmerica, "Caribbean", false),
         ("MO", "Macau", 22.20, 113.54, .asia, "Eastern Asia", false),
         ("MP", "Northern Mariana Islands", 15.18, 145.75, .oceania, "Micronesia", false),
+        ("MS", "Montserrat", 16.74, -62.19, .northAmerica, "Caribbean", false),
         ("MQ", "Martinique", 14.64, -61.02, .northAmerica, "Caribbean", false),
+        ("NU", "Niue", -19.05, -169.87, .oceania, "Polynesia", false),
         ("PF", "French Polynesia", -17.65, -149.43, .oceania, "Polynesia", false),
+        ("PM", "Saint Pierre and Miquelon", 46.88, -56.32, .northAmerica, "Northern America", false),
         ("RE", "Réunion", -21.12, 55.54, .africa, "Eastern Africa", false),
         ("SJ", "Svalbard", 78.22, 15.65, .europe, "Northern Europe", false),
         ("SX", "Sint Maarten", 18.04, -63.05, .northAmerica, "Caribbean", false),
         ("TC", "Turks and Caicos Islands", 21.69, -71.80, .northAmerica, "Caribbean", false),
         ("VG", "British Virgin Islands", 18.42, -64.64, .northAmerica, "Caribbean", false),
         ("VI", "U.S. Virgin Islands", 18.34, -64.90, .northAmerica, "Caribbean", false),
+        ("WF", "Wallis and Futuna", -13.30, -176.17, .oceania, "Polynesia", false),
+        ("YT", "Mayotte", -12.83, 45.15, .africa, "Eastern Africa", false),
     ]
 
     private static func load() -> [Country] {

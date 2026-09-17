@@ -197,10 +197,13 @@ struct GroupChatView: View {
         let target = replyTo
         composer = ""
         replyTo = nil
-        if let target {
-            await chat.reply(to: target.id, text: text, app: app)
-        } else {
-            await chat.send(text: text, memoryId: nil, app: app)
+        let sent = target == nil
+            ? await chat.send(text: text, memoryId: nil, app: app)
+            : await chat.reply(to: target!.id, text: text, app: app)
+        if !sent {
+            // Offline or rejected: give the words back instead of losing them.
+            composer = text
+            replyTo = target
         }
     }
 
@@ -276,22 +279,28 @@ final class ChatModel {
         _ = await app.profiles(for: Array(people))
     }
 
-    func send(text: String, memoryId: UUID?, app: AppModel) async {
+    @discardableResult
+    func send(text: String, memoryId: UUID?, app: AppModel) async -> Bool {
         do {
             try await app.backend.createPost(groupId: groupId, text: text, memoryId: memoryId)
             app.backend.logEvent("chat_sent", props: memoryId == nil ? nil : ["memory": "true"])
             await reload(app: app)
+            return true
         } catch {
             app.show(error)
+            return false
         }
     }
 
-    func reply(to postId: UUID, text: String, app: AppModel) async {
+    @discardableResult
+    func reply(to postId: UUID, text: String, app: AppModel) async -> Bool {
         do {
             try await app.backend.addPostComment(postId: postId, text: text)
             await reload(app: app)
+            return true
         } catch {
             app.show(error)
+            return false
         }
     }
 
