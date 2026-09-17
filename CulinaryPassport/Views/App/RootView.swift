@@ -60,6 +60,12 @@ struct RootView: View {
                 if let memory = app.memories.first(where: { !$0.photos.isEmpty && $0.notes != nil }) {
                     MemoryDetailView(memory: memory)
                 }
+            case .country: CountryMemoriesSheet(code: Self.debugCountry)
+            case .planTrip: TripPlanEditorSheet(mode: .new(countryCode: Self.debugCountry))
+            case .trip:
+                if let plan = app.tripPlans.first(where: { !$0.isOver }) {
+                    TripPlanDetailSheet(plan: plan)
+                }
             case .stamp: StampMomentView(codes: ["PT"], number: 21, date: "2026-09-10") { debugScreen = nil }
             case .burst: StampMomentView(codes: ["DE", "NL", "CZ", "AT", "HU"]) { debugScreen = nil }
             }
@@ -76,12 +82,19 @@ struct RootView: View {
     }
 
     #if DEBUG
-    /// Headless screenshot hook: `-open editor|import|checklist|wrapped|settings|memory|stamp|burst`.
+    /// Headless screenshot hook: `-open editor|import|checklist|wrapped|settings|memory|stamp|burst|trip|country|plan`.
     enum DebugScreen: String, Identifiable {
-        case editor, importPhotos = "import", checklist, wrapped, settings, memory, stamp, burst
+        case editor, importPhotos = "import", checklist, wrapped, settings, memory, stamp, burst, trip, country, planTrip = "plan"
         var id: String { rawValue }
     }
     @State private var debugScreen: DebugScreen?
+
+    /// `-open country -code ES`
+    private static var debugCountry: String {
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-code"), i + 1 < args.count { return args[i + 1].uppercased() }
+        return "JP"
+    }
     #endif
 
     /// Headless test hook: `-tab friends` opens on that tab.

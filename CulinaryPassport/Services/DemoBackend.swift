@@ -23,6 +23,8 @@ final class DemoBackend: Backend {
     private var posts: [GroupPost] = []
     private var postReactions: [PostReaction] = []
     private var postComments: [PostComment] = []
+    private var plans: [TripPlan] = []
+    private var places: [SavedPlace] = []
     private var uploaded: [String: Data] = [:]
     /// Simulated round trip, so loading states are exercised.
     var latency: Duration = .milliseconds(120)
@@ -81,6 +83,8 @@ final class DemoBackend: Backend {
         }
     }
     func seedPost(_ p: GroupPost) { sync { posts.append(p) } }
+    func seedTripPlan(_ plan: TripPlan) { sync { plans.append(plan) } }
+    func seedSavedPlace(_ place: SavedPlace) { sync { places.append(place) } }
     func seedPostReaction(_ r: PostReaction) { sync { postReactions.append(r) } }
     func seedPostComment(_ c: PostComment) { sync { postComments.append(c) } }
 
@@ -357,6 +361,89 @@ final class DemoBackend: Backend {
 
     func setBucketListed(_ code: String, _ on: Bool) async throws {
         sync { if on { bucket.insert(code) } else { bucket.remove(code) } }
+    }
+
+    // ── Trips + saved places ─────────────────────────────────────────────────
+
+    func tripPlans() async throws -> [TripPlan] {
+        sync {
+            plans.filter { $0.userId == me || $0.groupId.map { sharesGroupLocked(me, $0) } ?? false }
+                .sorted { ($0.startsOn ?? "9999", $0.createdAt) < ($1.startsOn ?? "9999", $1.createdAt) }
+        }
+    }
+
+    func createTripPlan(_ plan: NewTripPlan) async throws -> TripPlan {
+        await wait()
+        let made = TripPlan(id: plan.id, userId: me, name: plan.name, countryCodes: plan.countryCodes,
+                            startsOn: plan.startsOn, endsOn: plan.endsOn, groupId: plan.groupId,
+                            notes: plan.notes, createdAt: Date())
+        sync { plans.append(made) }
+        return made
+    }
+
+    func updateTripPlan(id: UUID, _ patch: TripPlanPatch) async throws -> TripPlan {
+        await wait()
+        return try sync {
+            guard let index = plans.firstIndex(where: { $0.id == id && $0.userId == me }) else {
+                throw AppError("That trip is gone.")
+            }
+            plans[index].name = patch.name
+            plans[index].countryCodes = patch.countryCodes
+            plans[index].startsOn = patch.startsOn
+            plans[index].endsOn = patch.endsOn
+            plans[index].groupId = patch.groupId
+            plans[index].notes = patch.notes
+            return plans[index]
+        }
+    }
+
+    func deleteTripPlan(id: UUID) async throws {
+        await wait()
+        sync {
+            plans.removeAll { $0.id == id && $0.userId == me }
+            for index in places.indices where places[index].tripId == id { places[index].tripId = nil }
+        }
+    }
+
+    func savedPlaces() async throws -> [SavedPlace] {
+        sync {
+            places.filter { place in
+                place.userId == me
+                    || place.tripId.flatMap { id in plans.first { $0.id == id } }
+                        .map { $0.groupId.map { sharesGroupLocked(me, $0) } ?? false } ?? false
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+        }
+    }
+
+    func savePlace(_ place: NewSavedPlace) async throws -> SavedPlace {
+        await wait()
+        let made = SavedPlace(id: place.id, userId: me, tripId: place.tripId, countryCode: place.countryCode,
+                              title: place.title, city: place.city, lat: place.lat, lng: place.lng,
+                              note: place.note, sourceEntryId: place.sourceEntryId, done: false,
+                              createdAt: Date())
+        sync { places.append(made) }
+        return made
+    }
+
+    func updateSavedPlace(id: UUID, _ patch: SavedPlacePatch) async throws -> SavedPlace {
+        await wait()
+        return try sync {
+            guard let index = places.firstIndex(where: { $0.id == id && $0.userId == me }) else {
+                throw AppError("That place is gone.")
+            }
+            places[index].tripId = patch.tripId
+            places[index].title = patch.title
+            places[index].city = patch.city
+            places[index].note = patch.note
+            places[index].done = patch.done
+            return places[index]
+        }
+    }
+
+    func deleteSavedPlace(id: UUID) async throws {
+        await wait()
+        sync { places.removeAll { $0.id == id && $0.userId == me } }
     }
 
     // ── Social graph ─────────────────────────────────────────────────────────

@@ -46,12 +46,22 @@ hygiene, and the app model against the demo backend).
 | **Globe** | Your countries in your color (deeper with every memory), bucket list in amber, small countries as dots. Tap a country for your memories there and which friends have been; *Where next?* spins to somewhere new. |
 | **Friends** | Memories from people you follow and your groups, a *New stamps* strip, Discover (public), activity, find people. |
 | **Groups** | A shared globe per group (everyone / all of us / me), leaderboard, and a chat for planning — share memories, react, reply, 🎲 *where should we go?* |
-| **Passport** | Stats and continent progress, yearly goal, bucket list, the stamp book, trips (inferred from memory dates), a map, Year in Travel, settings. |
+| **Passport** | Stats and continent progress, yearly goal, bucket list, the stamp book, trips — the ones you're planning and the ones you've been on — a map, Year in Travel, settings. |
 
 Ways into a passport: **scan the photo library** (locations are read
 on-device; nothing is uploaded — only the countries you pick), tick countries
 on a checklist, or add a memory (photos → place and date suggested from the
 photos' metadata → save; a new country plays the stamp moment).
+
+### Planning is the same object as the log
+
+A **trip** is where you're going, roughly when, who with, and the places
+you've saved for it — a boarding pass with a countdown. Save places from a
+friend's memory, from Discover, or from a map search; each one can be ticked
+off, or turned into a memory with its place already filled in. When the dates
+pass, the memories you posted in that window *are* the trip (`TripPlan.covers`),
+so nothing has to be migrated from "planned" to "been". A trip attached to a
+group is visible to that group, and they can add places to it.
 
 ## Architecture
 
@@ -59,20 +69,23 @@ photos' metadata → save; a new country plays the stamp moment).
 CulinaryPassport/
   CulinaryPassportApp.swift   entry: splash, session switch, deep links, password reset
   DesignSystem/               Theme (light/dark tokens, type), Components, RemoteImage
-                              (cached image pipeline), StampBadge, ImageTools
-  Models/                     Models (Profile, Memory, Stamp, Group…), Countries
-                              (197 countries + territories), TravelStats (stats, trips, year review)
+                              (cached image pipeline), StampBadge, Ticket (boarding
+                              pass, luggage tag, postcard), ImageTools
+  Models/                     Models (Profile, Memory, Stamp, Group…), Trips (planned
+                              trips + saved places), Countries (197 countries +
+                              territories), PlaceLocator (photo location → place),
+                              TravelStats (stats, chapters, year review)
   Services/
     Backend.swift             protocol for everything the app asks of a server
     SupabaseBackend.swift     live implementation (RLS decides visibility)
     DemoBackend.swift, DemoData.swift   in-memory fixtures + postcard renderer
     AppModel.swift            @Observable single source of truth for the signed-in
                               user; optimistic mutations, per-account disk snapshot
-    PhotoLibraryScanner.swift photo-library → countries (on-device), PlaceLocator
+    PhotoLibraryScanner.swift photo-library → countries (on-device)
     PlaceSearch.swift         Apple Maps place search + "On this day" reminders
   Globe/                      SceneKit globe: tessellated Natural Earth polygons,
                               ribbon borders, small-country dots, themed, fit-to-view camera
-  Views/                      App · Auth · Onboarding · Globe · Memories · Social · Groups · Passport · Shared
+  Views/                      App · Auth · Onboarding · Globe · Memories · Trips · Social · Groups · Passport · Shared
 ```
 
 Rules worth keeping:
@@ -84,6 +97,9 @@ Rules worth keeping:
 - **Images go through `ImagePipeline`** (disk-cached by storage path,
   downsampled to display size). Don't use `AsyncImage` for storage photos.
 - **Privacy is the server's job** (RLS). Client queries filter for relevance only.
+- **Paper, not panels.** A trip is a ticket (`TicketShape`), a saved place is a
+  luggage tag, a memory's words sit on a postcard. Reach for those before
+  adding another rounded rectangle.
 - Upload JPEGs via `ImageTools` — renderers use `.pixels` format (1pt = 1px)
   and re-encoding strips EXIF GPS from shared photos.
 

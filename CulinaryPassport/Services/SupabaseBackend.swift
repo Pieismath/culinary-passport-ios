@@ -294,6 +294,49 @@ final class SupabaseBackend: Backend {
         }
     }
 
+    // ── Trips + saved places ─────────────────────────────────────────────────
+
+    func tripPlans() async throws -> [TripPlan] {
+        try await client.from("trip_plans").select()
+            .order("starts_on", ascending: true, nullsFirst: false)
+            .order("created_at", ascending: false)
+            .execute().value
+    }
+
+    func createTripPlan(_ plan: NewTripPlan) async throws -> TripPlan {
+        try await client.from("trip_plans").insert(plan).select().single().execute().value
+    }
+
+    func updateTripPlan(id: UUID, _ patch: TripPlanPatch) async throws -> TripPlan {
+        try await client.from("trip_plans").update(patch).eq("id", value: id).select().single().execute().value
+    }
+
+    func deleteTripPlan(id: UUID) async throws {
+        try await client.from("trip_plans").delete().eq("id", value: id).execute()
+    }
+
+    func savedPlaces() async throws -> [SavedPlace] {
+        try await allPages { from, to in
+            try await client.from("saved_places").select()
+                .order("created_at", ascending: false)
+                .order("id")
+                .range(from: from, to: to)
+                .execute().value
+        }
+    }
+
+    func savePlace(_ place: NewSavedPlace) async throws -> SavedPlace {
+        try await client.from("saved_places").insert(place).select().single().execute().value
+    }
+
+    func updateSavedPlace(id: UUID, _ patch: SavedPlacePatch) async throws -> SavedPlace {
+        try await client.from("saved_places").update(patch).eq("id", value: id).select().single().execute().value
+    }
+
+    func deleteSavedPlace(id: UUID) async throws {
+        try await client.from("saved_places").delete().eq("id", value: id).execute()
+    }
+
     // ── Social graph ─────────────────────────────────────────────────────────
 
     func followingIds(of userId: UUID) async throws -> [UUID] {

@@ -168,6 +168,47 @@ enum DemoData {
                            coverPhoto: nil, inviteCode: "riverafam", createdBy: priya, createdAt: ago(days: 180))
         db.seedGroup(hikers, members: [priya, me, leo])
 
+        // ── Trips you're planning (and one that already happened) ────────────
+        func day(inDays: Int) -> String {
+            DayFormat.string(from: Date().addingTimeInterval(Double(inDays) * 86400))
+        }
+        let europeTrip = TripPlan(id: UUID(uuidString: "0D3E0000-0000-4000-8000-0000000000B1")!, userId: me,
+                                  name: "Alps by rail", countryCodes: ["FR", "IT", "CH"],
+                                  startsOn: day(inDays: 201), endsOn: day(inDays: 216), groupId: europe.id,
+                                  notes: "Trains between everything. No flights.", createdAt: ago(days: 40))
+        let patagonia = TripPlan(id: UUID(uuidString: "0D3E0000-0000-4000-8000-0000000000B2")!, userId: me,
+                                 name: "Patagonia, one day", countryCodes: ["AR", "CL"],
+                                 startsOn: nil, endsOn: nil, groupId: nil,
+                                 notes: "The W trek, end of season.", createdAt: ago(days: 120))
+        // The Japan/Korea/Hong Kong run in the stamp book was planned first —
+        // its memories turn it into a chapter.
+        let blossom = TripPlan(id: UUID(uuidString: "0D3E0000-0000-4000-8000-0000000000B3")!, userId: me,
+                               name: "Cherry blossom loop", countryCodes: ["JP", "KR", "HK"],
+                               startsOn: "2024-04-08", endsOn: "2024-04-20", groupId: nil,
+                               notes: "", createdAt: ago(days: 920))
+        for plan in [europeTrip, patagonia, blossom] { db.seedTripPlan(plan) }
+
+        func save(_ trip: TripPlan?, _ code: String, _ title: String, _ city: String,
+                  _ lat: Double?, _ lng: Double?, note: String = "", from memory: String? = nil,
+                  done: Bool = false, daysAgo: Double) {
+            db.seedSavedPlace(SavedPlace(id: UUID(), userId: me, tripId: trip?.id, countryCode: code,
+                                         title: title, city: city, lat: lat, lng: lng, note: note,
+                                         sourceEntryId: memory.flatMap { friendMemory[$0] },
+                                         done: done, createdAt: ago(days: daysAgo)))
+        }
+        save(europeTrip, "IT", "Cinque Terre", "Monterosso", 44.15, 9.65,
+             note: "Walk the coast path early, before the ferries.", daysAgo: 30)
+        save(europeTrip, "FR", "Aiguille du Midi", "Chamonix", 45.88, 6.89,
+             note: "First cable car, clear mornings only.", daysAgo: 22)
+        save(europeTrip, "CH", "Lauterbrunnen valley", "Lauterbrunnen", 46.59, 7.91, daysAgo: 12)
+        save(patagonia, "CL", "Torres del Paine", "Puerto Natales", -50.94, -73.41, daysAgo: 110)
+        save(patagonia, "AR", "Perito Moreno", "El Calafate", -50.47, -73.05, daysAgo: 108)
+        save(nil, "AT", "Hallstatt", "Hallstatt", 47.56, 13.65,
+             note: "Hana says go on a weekday.", from: "Hallstatt", daysAgo: 1.1)
+        save(nil, "JO", "Petra", "Wadi Musa", 30.33, 35.44, from: "Petra", daysAgo: 0.1)
+        save(nil, "ES", "Sagrada Família", "Barcelona", 41.40, 2.17,
+             note: "Book the towers.", from: "Sagrada Família", daysAgo: 15)
+
         func post(_ group: Group, _ author: UUID, _ text: String, memory: String? = nil, hours: Double) -> UUID {
             let id = UUID()
             db.seedPost(GroupPost(id: id, groupId: group.id, authorId: author,

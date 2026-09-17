@@ -83,6 +83,8 @@ struct MemoryCard: View {
     let onOpenAuthor: () -> Void
     let onReact: (String, Bool) -> Void
 
+    @Environment(AppModel.self) private var app
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
@@ -130,6 +132,9 @@ struct MemoryCard: View {
             HStack(spacing: 8) {
                 ReactionBar(tallies: tallies, onToggle: onReact, compact: true)
                 Spacer(minLength: 0)
+                if memory.userId != app.myId {
+                    SavePlaceButton(memory: memory)
+                }
                 Button(action: onOpen) {
                     Label("\(commentCount)", systemImage: "bubble.left")
                         .font(.subheadline.weight(.medium))
@@ -186,6 +191,35 @@ struct MemoryTile: View {
             .contentShape(Rectangle())
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(memory.displayTitle), \(memory.placeLine), \(DayFormat.pretty(memory.date))")
+    }
+}
+
+/// "I want to go there" — keeps a friend's place for a trip of your own.
+struct SavePlaceButton: View {
+    let memory: Memory
+    var showsLabel = false
+
+    @Environment(AppModel.self) private var app
+
+    private var saved: Bool { app.savedPlace(from: memory) != nil }
+
+    var body: some View {
+        Button {
+            UISelectionFeedbackGenerator().selectionChanged()
+            Task { await app.toggleSavedPlace(from: memory) }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: saved ? "bookmark.fill" : "bookmark")
+                if showsLabel { Text(saved ? "Saved for a trip" : "Save this place") }
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(saved ? Color.bucket : Color.inkSecondary)
+            .padding(.horizontal, showsLabel ? 12 : 8)
+            .padding(.vertical, 6)
+            .background(saved ? Color.bucketSoft : Color.sunken, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(saved ? "Saved for a trip" : "Save this place for a trip")
     }
 }
 

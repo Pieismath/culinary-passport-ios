@@ -162,6 +162,57 @@ final class TravelModelTests: XCTestCase {
 
     // ── Trips ────────────────────────────────────────────────────────────────
 
+    // ── Planning ─────────────────────────────────────────────────────────────
+
+    private func plan(_ start: String?, _ end: String?, countries: [String] = ["JP"],
+                      name: String = "") -> TripPlan {
+        TripPlan(id: UUID(), userId: me, name: name, countryCodes: countries,
+                 startsOn: start, endsOn: end, groupId: nil, notes: "", createdAt: Date())
+    }
+
+    func testTripPhasesReadAsACountdown() {
+        XCTAssertEqual(plan(nil, nil).countdownText(), "Someday")
+        XCTAssertEqual(plan(day(10), day(20)).countdownText(), "In 10 days")
+        XCTAssertEqual(plan(day(1), day(3)).countdownText(), "Tomorrow")
+        XCTAssertEqual(plan(day(-2), day(5)).countdownText(), "Day 3 of 8")
+        XCTAssertEqual(plan(day(-9), day(-2)).countdownText(), "Been")
+        XCTAssertTrue(plan(day(-9), day(-2)).isOver)
+        XCTAssertFalse(plan(nil, nil).isOver, "a someday trip is never over")
+        XCTAssertEqual(plan(day(0), day(0)).days, 1)
+    }
+
+    func testTripClaimsTheMemoriesPostedOnIt() {
+        let trip = plan("2027-04-06", "2027-04-21", countries: ["FR", "IT"])
+        XCTAssertTrue(trip.covers(memory("FR", "2027-04-10")))
+        XCTAssertTrue(trip.covers(memory("IT", "2027-04-22")), "a day either side, for late landings")
+        XCTAssertFalse(trip.covers(memory("FR", "2027-05-02")), "outside the window")
+        XCTAssertFalse(trip.covers(memory("ES", "2027-04-10")), "another country")
+        XCTAssertFalse(plan(nil, nil).covers(memory("JP", "2027-04-10")), "no dates, no claim")
+        // A trip with no countries is a date window: anything inside counts.
+        XCTAssertTrue(plan("2027-04-06", "2027-04-21", countries: []).covers(memory("ES", "2027-04-10")))
+    }
+
+    func testChapterTakesTheNameOfThePlanThatCoversIt() {
+        let memories = [memory("JP", "2024-04-09"), memory("JP", "2024-04-12"), memory("KR", "2024-04-16")]
+        let blossom = TripPlan(id: UUID(), userId: me, name: "Cherry blossom loop",
+                               countryCodes: ["JP", "KR"], startsOn: "2024-04-08", endsOn: "2024-04-20",
+                               groupId: nil, notes: "", createdAt: Date())
+        let chapters = TripBuilder.trips(from: memories, plans: [blossom])
+        XCTAssertEqual(chapters.count, 1)
+        XCTAssertEqual(chapters.first?.title, "Cherry blossom loop")
+        // Without the plan it falls back to the countries.
+        XCTAssertEqual(TripBuilder.trips(from: memories).first?.title, "Japan & South Korea")
+    }
+
+    func testDateRangesStayReadable() {
+        XCTAssertEqual(DateRange.text(from: "2027-04-06", to: "2027-04-06"),
+                       DayFormat.pretty("2027-04-06"), "one day is just that day")
+        let crossYear = DateRange.text(from: "2026-12-18", to: "2027-01-03")
+        XCTAssertTrue(crossYear.contains("2026") && crossYear.contains("2027"), crossYear)
+        let sameMonth = DateRange.text(from: "2027-04-06", to: "2027-04-21")
+        XCTAssertTrue(sameMonth.contains("6") && sameMonth.contains("21") && sameMonth.contains("2027"), sameMonth)
+    }
+
     func testTripsSplitOnGaps() {
         let trips = TripBuilder.trips(from: [
             memory("JP", "2024-04-09"), memory("JP", "2024-04-12"), memory("KR", "2024-04-16"),
@@ -426,6 +477,48 @@ final class AppModelTests: XCTestCase {
         XCTAssertNil(PhotoMetadata.exifDate("garbage"))
     }
 
+    // ── Planning ─────────────────────────────────────────────────────────────
+
+    func testPlanningATripAndTickingPlacesOff() async throws {
+        let app = await signedInModel()
+        let before = app.tripPlans.count
+        let trip = try await app.createTrip(name: "Ferry hopping", countries: ["GR"],
+                                            startsOn: day(30), endsOn: day(44), groupId: nil)
+        XCTAssertEqual(app.tripPlans.count, before + 1)
+        XCTAssertTrue(app.upcomingTrips.contains { $0.id == trip.id })
+
+        let place = try await app.savePlace(countryCode: "GR", title: "Milos", city: "Adamas",
+                                            tripId: trip.id)
+        XCTAssertEqual(app.places(on: trip).map(\.id), [place.id])
+        XCTAssertEqual(app.placesByCountry["GR"]?.count, 1)
+
+        try await app.updatePlace(place, done: true)
+        XCTAssertEqual(app.places(on: trip).first?.done, true)
+        XCTAssertNil(app.placesByCountry["GR"], "a ticked place isn't still to-do")
+
+        // Deleting the trip keeps the place, unattached.
+        try await app.deleteTrip(trip)
+        XCTAssertFalse(app.tripPlans.contains { $0.id == trip.id })
+        XCTAssertEqual(app.savedPlaces.first { $0.id == place.id }?.tripId, nil)
+    }
+
+    func testSavingAFriendsPlaceIsOneTapAndReversible() async throws {
+        let app = await signedInModel()
+        let theirs = try XCTUnwrap(app.backend as? DemoBackend)
+        let feed = try await theirs.friendsFeed(before: nil, limit: 5)
+        // Not one the demo passport already saved.
+        let memory = try XCTUnwrap(feed.first { $0.userId != app.myId && app.savedPlace(from: $0) == nil })
+
+        XCTAssertNil(app.savedPlace(from: memory))
+        await app.toggleSavedPlace(from: memory)
+        let saved = try XCTUnwrap(app.savedPlace(from: memory))
+        XCTAssertEqual(saved.countryCode, memory.countryCode)
+        XCTAssertEqual(saved.sourceEntryId, memory.id)
+
+        await app.toggleSavedPlace(from: memory)
+        XCTAssertNil(app.savedPlace(from: memory), "tapping again unsaves it")
+    }
+
     func testDeepLinks() async {
         let app = await signedInModel()
         app.handle(url: URL(string: "culinarypassport://join/europe2027")!)
@@ -437,4 +530,9 @@ final class AppModelTests: XCTestCase {
         app.handle(url: URL(string: "https://example.com/join/x")!)
         XCTAssertNil(app.route)
     }
+}
+
+/// A day this many days from today, as the app stores it.
+private func day(_ offset: Int) -> String {
+    DayFormat.string(from: Date().addingTimeInterval(Double(offset) * 86400))
 }

@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import MapKit
+import CoreLocation
 
 /// Your passport: who you are, how much of the world you've seen, and every
 /// stamp and memory — as a stamp book, a timeline of trips, or a map.
@@ -13,7 +14,19 @@ struct PassportView: View {
     }
 
     @Environment(AppModel.self) private var app
-    @State private var page: Page = .stamps
+    @State private var page: Page = PassportView.initialPage
+
+    /// Headless screenshot hook: `-page trips|map`.
+    private static var initialPage: Page {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-page"), i + 1 < args.count,
+           let page = Page(rawValue: args[i + 1].capitalized) {
+            return page
+        }
+        #endif
+        return .stamps
+    }
     @State private var pickedItem: PhotosPickerItem?
     @State private var cropping: CropImage?
     @State private var uploadingAvatar = false
@@ -26,6 +39,10 @@ struct PassportView: View {
     @State private var addingMemory = false
     @State private var country: String?
     @State private var trip: Trip?
+    @State private var plan: TripPlan?
+    @State private var planning = false
+    @State private var editingPlace: SavedPlace?
+    @State private var loggingAt: SavedPlace?
     @State private var viewing: Memory?
     @State private var shareImage: UIImage?
 
@@ -37,20 +54,31 @@ struct PassportView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 16) {
-                    header
-                    worldCard
-                    goalCard
-                    bucketCard
-                    Picker("View", selection: $page) {
-                        ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                ScrollViewReader { scroll in
+                    VStack(spacing: 16) {
+                        header
+                        worldCard
+                        goalCard
+                        bucketCard
+                        Picker("View", selection: $page) {
+                            ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.top, 4)
+                        .id("sections")
+                        sectionContent
                     }
-                    .pickerStyle(.segmented)
-                    .padding(.top, 4)
-                    sectionContent
+                    .padding(.horizontal, Metrics.gutter)
+                    .padding(.bottom, 30)
+                    #if DEBUG
+                    // Screenshot hook: `-page trips` opens on that section.
+                    .task {
+                        guard ProcessInfo.processInfo.arguments.contains("-page") else { return }
+                        try? await Task.sleep(for: .milliseconds(400))
+                        scroll.scrollTo("sections", anchor: .top)
+                    }
+                    #endif
                 }
-                .padding(.horizontal, Metrics.gutter)
-                .padding(.bottom, 30)
             }
             .paperBackground()
             .refreshable { await app.refresh() }
@@ -91,6 +119,10 @@ struct PassportView: View {
                 CountryMemoriesSheet(code: ref.code)
             }
             .sheet(item: $trip) { TripDetailSheet(trip: $0) }
+            .sheet(item: $plan) { TripPlanDetailSheet(plan: $0) }
+            .sheet(isPresented: $planning) { TripPlanEditorSheet(mode: .new(countryCode: nil)) }
+            .sheet(item: $editingPlace) { SavedPlaceEditorSheet(place: $0) }
+            .sheet(item: $loggingAt) { MemoryEditorView(mode: .atPlace($0)) }
             .sheet(item: $viewing) { MemoryDetailView(memory: $0) }
             .task(id: app.stats) { renderShareCard() }
         }
@@ -349,20 +381,57 @@ struct PassportView: View {
     }
 
     @ViewBuilder private var tripsList: some View {
-        let trips = TripBuilder.trips(from: app.memories)
-        if trips.isEmpty {
-            EmptyStateView(systemImage: "photo.stack", title: "No memories yet",
-                           message: "Add photos from a trip — we'll group them into trips automatically.",
-                           primaryTitle: "Add a memory", primaryAction: { addingMemory = true })
-                .padding(.vertical, 24)
-        } else {
-            LazyVStack(alignment: .leading, spacing: 14) {
-                ForEach(trips) { trip in
+        let chapters = app.tripChapters
+        let upcoming = app.upcomingTrips
+        let loose = app.savedPlaces.filter { $0.tripId == nil && !$0.done }
+        LazyVStack(alignment: .leading, spacing: 14) {
+            if !upcoming.isEmpty {
+                SectionHeader("Coming up", subtitle: upcoming.count.counted("trip"))
+                ForEach(upcoming) { plan in
+                    Button { self.plan = plan } label: {
+                        TripPlanCard(plan: plan, members: members(of: plan),
+                                     savedCount: app.places(on: plan).count)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Button { planning = true } label: {
+                Label("Plan a trip", systemImage: "paperplane")
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .padding(.vertical, upcoming.isEmpty ? 0 : 2)
+
+            if !loose.isEmpty {
+                SectionHeader("Saved places", subtitle: "\(loose.count) waiting for a trip")
+                ForEach(loose.prefix(8)) { place in
+                    SavedPlaceTag(place: place,
+                                  onLog: { loggingAt = place },
+                                  onEdit: { editingPlace = place })
+                }
+            }
+
+            if chapters.isEmpty {
+                if upcoming.isEmpty && loose.isEmpty {
+                    EmptyStateView(systemImage: "paperplane", title: "Nothing planned yet",
+                                   message: "Plan a trip, or save places from friends' memories — they land here.",
+                                   primaryTitle: "Plan a trip", primaryAction: { planning = true })
+                        .padding(.vertical, 20)
+                }
+            } else {
+                SectionHeader("Been", subtitle: chapters.count.counted("trip"))
+                    .padding(.top, 4)
+                ForEach(chapters) { trip in
                     Button { self.trip = trip } label: { TripCard(trip: trip) }
                         .buttonStyle(.plain)
                 }
             }
         }
+    }
+
+    private func members(of plan: TripPlan) -> [Profile] {
+        guard let groupId = plan.groupId else { return [] }
+        return app.members(of: groupId).compactMap { app.profile($0) }
     }
 
     @ViewBuilder private var memoriesMap: some View {
@@ -471,9 +540,15 @@ struct CountryMemoriesSheet: View {
     @State private var adding: EditorRequest?
     @State private var localIds: [String] = []
     @State private var confirmRemove = false
+    @State private var friendMemories: [Memory] = []
+    @State private var savingPlace = false
+    @State private var planning = false
+    @State private var editingPlace: SavedPlace?
+    @State private var loggingAt: SavedPlace?
 
     private var country: Country? { CountryStore.byCode[code] }
     private var memories: [Memory] { app.memoriesByCountry[code] ?? [] }
+    private var saved: [SavedPlace] { app.savedPlaces.filter { $0.countryCode == code } }
 
     var body: some View {
         NavigationStack {
@@ -501,6 +576,44 @@ struct CountryMemoriesSheet: View {
                         Label("Add a memory here", systemImage: "photo.badge.plus")
                     }
                     .buttonStyle(.primary)
+
+                    HStack(spacing: 10) {
+                        Button { savingPlace = true } label: {
+                            Label("Save a place", systemImage: "bookmark")
+                        }
+                        .buttonStyle(SecondaryButtonStyle())
+                        Button { planning = true } label: {
+                            Label("Plan a trip", systemImage: "paperplane")
+                        }
+                        .buttonStyle(SecondaryButtonStyle())
+                    }
+
+                    if !saved.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            SectionHeader("Saved here",
+                                          subtitle: "\(saved.filter { !$0.done }.count) to go")
+                            ForEach(saved) { place in
+                                SavedPlaceTag(place: place,
+                                              onLog: { loggingAt = place },
+                                              onEdit: { editingPlace = place })
+                            }
+                        }
+                    }
+
+                    if !friendMemories.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            SectionHeader("Where friends went", subtitle: "Save one for your next trip")
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(alignment: .top, spacing: 10) {
+                                    ForEach(friendMemories) { memory in
+                                        FriendPlaceCard(memory: memory) { viewing = memory }
+                                    }
+                                }
+                                .padding(.horizontal, 2)
+                                .padding(.bottom, 4)
+                            }
+                        }
+                    }
 
                     if !localIds.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
@@ -565,8 +678,72 @@ struct CountryMemoriesSheet: View {
             .sheet(item: $adding) { request in
                 MemoryEditorView(mode: request.mode)
             }
+            .sheet(isPresented: $savingPlace) {
+                PlaceSearchSheet(near: country.map {
+                    CLLocationCoordinate2D(latitude: $0.centroid.lat, longitude: $0.centroid.lng)
+                }) { result in
+                    Task {
+                        do {
+                            try await app.savePlace(countryCode: result.countryCode ?? code,
+                                                    title: result.title.isEmpty ? result.city : result.title,
+                                                    city: result.city, lat: result.latitude, lng: result.longitude)
+                            app.celebrate("Saved to your places")
+                        } catch {
+                            app.show(error)
+                        }
+                    }
+                }
+            }
+            .sheet(isPresented: $planning) { TripPlanEditorSheet(mode: .new(countryCode: code)) }
+            .sheet(item: $editingPlace) { SavedPlaceEditorSheet(place: $0) }
+            .sheet(item: $loggingAt) { MemoryEditorView(mode: .atPlace($0)) }
             .task { localIds = LocalPhotoIndex.assetIds(for: code) }
+            .task(id: code) { await loadFriendPlaces() }
         }
+    }
+}
+
+extension CountryMemoriesSheet {
+    /// What the people you follow posted here — the recommendations that
+    /// turn into saved places.
+    fileprivate func loadFriendPlaces() async {
+        let ids = Array(app.networkIds)
+        guard !ids.isEmpty else { return }
+        let found = (try? await app.backend.memories(countryCode: code, userIds: ids)) ?? []
+        _ = await app.profiles(for: found.map(\.userId))
+        friendMemories = Array(found.filter { !app.blocked.contains($0.userId) }.prefix(12))
+    }
+}
+
+/// A friend's memory as a place you could save: photo, what it was, who went.
+struct FriendPlaceCard: View {
+    let memory: Memory
+    let onOpen: () -> Void
+
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: onOpen) {
+                MemoryTile(memory: memory, showTitle: false)
+                    .frame(width: 150, height: 150)
+            }
+            .buttonStyle(.plain)
+            Text(memory.displayTitle)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.ink)
+                .lineLimit(1)
+            HStack(spacing: 6) {
+                AvatarView(profile: app.profile(memory.userId), size: 18)
+                Text(app.profile(memory.userId)?.firstName ?? "A friend")
+                    .font(.caption)
+                    .foregroundStyle(Color.inkSecondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                SavePlaceButton(memory: memory)
+            }
+        }
+        .frame(width: 150)
     }
 }
 

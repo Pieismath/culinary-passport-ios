@@ -11,6 +11,8 @@ struct MemoryEditorView: View {
         case new(countryCode: String?, pickPhotosFirst: Bool)
         case edit(Memory)
         case fromLibrary(assetIds: [String], countryCode: String?)
+        /// From a place you saved for a trip — it ticks itself off once saved.
+        case atPlace(SavedPlace)
     }
 
     let mode: Mode
@@ -403,6 +405,15 @@ struct MemoryEditorView: View {
             draft = MemoryDraft(memory: memory)
             placeTouched = true
             dateTouched = true
+        case .atPlace(let place):
+            draft.countryCode = place.countryCode
+            draft.title = place.title
+            draft.city = place.city
+            draft.lat = place.lat
+            draft.lng = place.lng
+            placeTouched = true
+            try? await Task.sleep(for: .milliseconds(350))
+            showPicker = true
         case .fromLibrary(let ids, let code):
             if let code { draft.countryCode = code }
             loadingPhotos = true
@@ -487,6 +498,10 @@ struct MemoryEditorView: View {
                                                   newPhotos: newPhotos.map(\.jpeg),
                                                   shareTo: draft.visibility == .private ? [] : shareGroups)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
+            // Logging a memory at a saved place ticks it off the trip list.
+            if case .atPlace(let place) = mode, !place.done {
+                try? await app.updatePlace(place, done: true)
+            }
             if result.isNewCountry {
                 stampResult = result
             } else {

@@ -43,6 +43,9 @@ struct MemoryDetailView: View {
                         .foregroundStyle(Color.inkSecondary)
                         if isMine {
                             Pill(systemImage: current.visibility.systemImage, text: current.visibility.label)
+                        } else {
+                            SavePlaceButton(memory: current, showsLabel: true)
+                                .padding(.top, 2)
                         }
                     }
 
@@ -69,10 +72,8 @@ struct MemoryDetailView: View {
                     }
 
                     if let notes = current.notes, !notes.isEmpty {
-                        Text(notes)
-                            .font(.body)
-                            .foregroundStyle(Color.ink)
-                            .fixedSize(horizontal: false, vertical: true)
+                        PostcardNote(text: notes, code: current.countryCode,
+                                     stampSubtitle: String(current.date.prefix(4)))
                     }
 
                     ReactionBar(

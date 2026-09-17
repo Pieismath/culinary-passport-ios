@@ -58,6 +58,9 @@ final class AppModel {
     var blocked: Set<UUID> = []
     var groups: [Group] = []
     var membersByGroup: [UUID: [GroupMember]] = [:]
+    /// Trips you're planning, and the places saved for them.
+    var tripPlans: [TripPlan] = [] { didSet { rebuildDerived() } }
+    var savedPlaces: [SavedPlace] = [] { didSet { rebuildDerived() } }
     /// Profiles of everyone around you (friends, group mates, authors seen).
     var people: [UUID: Profile] = [:]
 
@@ -72,6 +75,9 @@ final class AppModel {
     private(set) var visitedCodes: Set<String> = []
     private(set) var stampsByCode: [String: Stamp] = [:]
     private(set) var memoriesByCountry: [String: [Memory]] = [:]
+    private(set) var placesByCountry: [String: [SavedPlace]] = [:]
+    /// Trips that haven't ended yet, soonest first (undated ones last).
+    private(set) var upcomingTrips: [TripPlan] = []
     private(set) var stats = TravelStats()
 
     var myId: UUID? {
@@ -175,6 +181,8 @@ final class AppModel {
         me = nil
         memories = []
         stamps = []
+        tripPlans = []
+        savedPlaces = []
         bucketList = []
         following = []
         followers = []
@@ -216,8 +224,11 @@ final class AppModel {
             async let followers = backend.followerIds(of: myId)
             async let blocked = backend.blockedIds()
             async let groups = backend.myGroups()
+            async let trips = backend.tripPlans()
+            async let places = backend.savedPlaces()
             let (p, m, s, b, fing, fers, bl, g) = try await (profile, memories, stamps, bucket,
                                                             following, followers, blocked, groups)
+            let (plans, saved) = try await (trips, places)
             guard self.myId == myId else { return }
             guard let p else {
                 // Profile row is gone (deleted account / stale session).
@@ -232,6 +243,8 @@ final class AppModel {
             self.followers = Set(fers)
             self.blocked = bl
             self.groups = g
+            tripPlans = plans
+            savedPlaces = saved
             // The traveller's own data is in: the app is usable from here even
             // if the group/people round trips below fail.
             loadState = .loaded
@@ -445,6 +458,123 @@ final class AppModel {
         }
     }
 
+    // ── Trips + saved places ─────────────────────────────────────────────────
+
+    @discardableResult
+    func createTrip(name: String, countries: [String], startsOn: String?, endsOn: String?,
+                    groupId: UUID?, notes: String = "") async throws -> TripPlan {
+        guard let myId else { throw AppError("You're signed out.") }
+        let plan = try await backend.createTripPlan(
+            NewTripPlan(id: UUID(), userId: myId, name: name.trimmed, countryCodes: countries,
+                        startsOn: startsOn, endsOn: endsOn, groupId: groupId, notes: notes.trimmed))
+        guard self.myId == myId else { throw CancellationError() }
+        tripPlans.append(plan)
+        backend.logEvent("trip_planned", props: ["countries": String(countries.count)])
+        saveSnapshot()
+        return plan
+    }
+
+    func updateTrip(_ plan: TripPlan, name: String, countries: [String], startsOn: String?,
+                    endsOn: String?, groupId: UUID?, notes: String) async throws {
+        let owner = myId
+        let fresh = try await backend.updateTripPlan(
+            id: plan.id, TripPlanPatch(name: name.trimmed, countryCodes: countries, startsOn: startsOn,
+                                       endsOn: endsOn, groupId: groupId, notes: notes.trimmed))
+        guard myId == owner else { return }
+        if let index = tripPlans.firstIndex(where: { $0.id == plan.id }) { tripPlans[index] = fresh }
+        saveSnapshot()
+    }
+
+    func deleteTrip(_ plan: TripPlan) async throws {
+        let owner = myId
+        let before = tripPlans
+        tripPlans.removeAll { $0.id == plan.id }
+        do {
+            try await backend.deleteTripPlan(id: plan.id)
+            guard myId == owner else { return }
+            // Its places stay on your list, just unattached (as on the server).
+            for index in savedPlaces.indices where savedPlaces[index].tripId == plan.id {
+                savedPlaces[index].tripId = nil
+            }
+            saveSnapshot()
+        } catch {
+            if myId == owner { tripPlans = before }
+            throw error
+        }
+    }
+
+    /// Save somewhere you want to go. `from` credits the memory it came from.
+    @discardableResult
+    func savePlace(countryCode: String, title: String, city: String = "", lat: Double? = nil,
+                   lng: Double? = nil, note: String = "", tripId: UUID? = nil,
+                   from memory: Memory? = nil) async throws -> SavedPlace {
+        guard let myId else { throw AppError("You're signed out.") }
+        let place = try await backend.savePlace(
+            NewSavedPlace(id: UUID(), userId: myId, tripId: tripId, countryCode: countryCode,
+                          title: title.trimmed, city: city.trimmed, lat: lat, lng: lng,
+                          note: note.trimmed, sourceEntryId: memory?.id))
+        guard self.myId == myId else { throw CancellationError() }
+        savedPlaces.insert(place, at: 0)
+        backend.logEvent("place_saved", props: ["country": countryCode,
+                                                "from": memory == nil ? "search" : "memory"])
+        saveSnapshot()
+        return place
+    }
+
+    func updatePlace(_ place: SavedPlace, title: String? = nil, city: String? = nil,
+                     note: String? = nil, tripId: UUID?? = nil, done: Bool? = nil) async throws {
+        let owner = myId
+        let before = savedPlaces
+        var edited = place
+        if let title { edited.title = title.trimmed }
+        if let city { edited.city = city.trimmed }
+        if let note { edited.note = note.trimmed }
+        if let tripId { edited.tripId = tripId }
+        if let done { edited.done = done }
+        if let index = savedPlaces.firstIndex(where: { $0.id == place.id }) { savedPlaces[index] = edited }
+        do {
+            let fresh = try await backend.updateSavedPlace(
+                id: place.id, SavedPlacePatch(tripId: edited.tripId, title: edited.title,
+                                              city: edited.city, note: edited.note, done: edited.done))
+            guard myId == owner else { return }
+            if let index = savedPlaces.firstIndex(where: { $0.id == place.id }) { savedPlaces[index] = fresh }
+            saveSnapshot()
+        } catch {
+            if myId == owner { savedPlaces = before }
+            throw error
+        }
+    }
+
+    /// Save (or unsave) the place a memory is about — how most places get
+    /// onto your list: you see where a friend went and keep it.
+    func toggleSavedPlace(from memory: Memory) async {
+        do {
+            if let existing = savedPlace(from: memory) {
+                try await deletePlace(existing)
+            } else {
+                try await savePlace(countryCode: memory.countryCode, title: memory.title,
+                                    city: memory.city ?? "", lat: memory.lat, lng: memory.lng,
+                                    from: memory)
+                celebrate("Saved to your places")
+            }
+        } catch {
+            show(error)
+        }
+    }
+
+    func deletePlace(_ place: SavedPlace) async throws {
+        let owner = myId
+        let before = savedPlaces
+        savedPlaces.removeAll { $0.id == place.id }
+        do {
+            try await backend.deleteSavedPlace(id: place.id)
+            if myId == owner { saveSnapshot() }
+        } catch {
+            if myId == owner { savedPlaces = before }
+            throw error
+        }
+    }
+
     // ── People ───────────────────────────────────────────────────────────────
 
     func setFollowing(_ userId: UUID, _ follow: Bool) {
@@ -632,6 +762,9 @@ final class AppModel {
         var me: Profile?
         var memories: [Memory]
         var stamps: [Stamp]
+        /// Optional so a snapshot written before trips existed still loads.
+        var tripPlans: [TripPlan]?
+        var savedPlaces: [SavedPlace]?
         var bucketList: Set<String>
         var following: Set<UUID>
         var followers: Set<UUID>
@@ -642,7 +775,8 @@ final class AppModel {
 
     private func saveSnapshot() {
         guard let myId, !isDemo else { return }
-        let snapshot = Snapshot(me: me, memories: memories, stamps: stamps, bucketList: bucketList,
+        let snapshot = Snapshot(me: me, memories: memories, stamps: stamps,
+                                tripPlans: tripPlans, savedPlaces: savedPlaces, bucketList: bucketList,
                                 following: following, followers: followers, groups: groups,
                                 members: membersByGroup.values.flatMap { $0 },
                                 people: Array(people.values))
@@ -654,6 +788,8 @@ final class AppModel {
         me = snapshot.me
         memories = snapshot.memories
         stamps = snapshot.stamps
+        tripPlans = snapshot.tripPlans ?? []
+        savedPlaces = snapshot.savedPlaces ?? []
         bucketList = snapshot.bucketList
         following = snapshot.following
         followers = snapshot.followers
@@ -666,7 +802,28 @@ final class AppModel {
         visitedCodes = Set(stamps.map(\.countryCode))
         stampsByCode = Dictionary(stamps.map { ($0.countryCode, $0) }, uniquingKeysWith: { a, _ in a })
         memoriesByCountry = Dictionary(grouping: memories, by: \.countryCode)
+        placesByCountry = Dictionary(grouping: savedPlaces.filter { !$0.done }, by: \.countryCode)
+        upcomingTrips = tripPlans.filter { !$0.isOver }
+            .sorted { ($0.startsOn ?? "9999-99-99", $0.title) < ($1.startsOn ?? "9999-99-99", $1.title) }
         stats = TravelStats(stamps: stamps, memories: memories)
+    }
+
+    /// Chapters of your travels: memories grouped into trips, named by the
+    /// plan that covers them when there is one.
+    var tripChapters: [Trip] { TripBuilder.trips(from: memories, plans: tripPlans) }
+
+    func places(on trip: TripPlan) -> [SavedPlace] {
+        savedPlaces.filter { $0.tripId == trip.id }
+            .sorted { ($0.done ? 1 : 0, $1.createdAt) < ($1.done ? 1 : 0, $0.createdAt) }
+    }
+
+    func memories(on trip: TripPlan) -> [Memory] {
+        memories.filter(trip.covers).sorted { ($0.date, $0.createdAt) < ($1.date, $1.createdAt) }
+    }
+
+    /// Whether this memory is already on your list (so the button can say so).
+    func savedPlace(from memory: Memory) -> SavedPlace? {
+        savedPlaces.first { $0.sourceEntryId == memory.id }
     }
 }
 

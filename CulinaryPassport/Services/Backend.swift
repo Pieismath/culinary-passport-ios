@@ -41,6 +41,16 @@ protocol Backend: AnyObject {
     func bucketList() async throws -> Set<String>
     func setBucketListed(_ code: String, _ on: Bool) async throws
 
+    // ── Trips + saved places ─────────────────────────────────────────────────
+    func tripPlans() async throws -> [TripPlan]
+    func createTripPlan(_ plan: NewTripPlan) async throws -> TripPlan
+    func updateTripPlan(id: UUID, _ patch: TripPlanPatch) async throws -> TripPlan
+    func deleteTripPlan(id: UUID) async throws
+    func savedPlaces() async throws -> [SavedPlace]
+    func savePlace(_ place: NewSavedPlace) async throws -> SavedPlace
+    func updateSavedPlace(id: UUID, _ patch: SavedPlacePatch) async throws -> SavedPlace
+    func deleteSavedPlace(id: UUID) async throws
+
     // ── Social graph ─────────────────────────────────────────────────────────
     func followingIds(of userId: UUID) async throws -> [UUID]
     func followerIds(of userId: UUID) async throws -> [UUID]

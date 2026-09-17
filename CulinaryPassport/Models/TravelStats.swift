@@ -64,11 +64,13 @@ struct TravelStats: Equatable {
     }
 }
 
-/// A run of memories close together in time — "Japan, Apr 2024". Trips are
-/// inferred, never stored: nobody has to create one before posting.
+/// A run of memories close together in time — "Japan, Apr 2024". Chapters are
+/// inferred, never stored: nobody has to plan a trip before posting. When a
+/// plan does cover them, it lends its name (see TripPlan.covers).
 struct Trip: Identifiable, Hashable {
     let memories: [Memory]           // oldest → newest
     let countryCodes: [String]       // in the order they were visited
+    var plan: TripPlan?
 
     var id: String { memories.first.map { $0.id.uuidString } ?? UUID().uuidString }
     var start: String { memories.first?.date ?? "" }
@@ -77,6 +79,7 @@ struct Trip: Identifiable, Hashable {
     var photoCount: Int { memories.reduce(0) { $0 + $1.photos.count } }
 
     var title: String {
+        if let named = plan?.name.trimmed, !named.isEmpty { return named }
         let names = countryCodes.compactMap { CountryStore.byCode[$0]?.name }
         switch names.count {
         case 0: return "Trip"
@@ -89,24 +92,11 @@ struct Trip: Identifiable, Hashable {
     var flags: String { countryCodes.map(Country.flag(for:)).joined(separator: " ") }
 
     /// "12 – 19 Apr 2024", "28 Mar – 3 Apr 2024", "Dec 2023 – Jan 2024"
-    var dateRangeText: String {
-        guard let s = DayFormat.date(from: start), let e = DayFormat.date(from: end) else { return start }
-        let cal = Calendar(identifier: .gregorian)
-        if cal.isDate(s, inSameDayAs: e) {
-            return s.formatted(.dateTime.day().month(.abbreviated).year())
-        }
-        if cal.component(.year, from: s) != cal.component(.year, from: e) {
-            return "\(s.formatted(.dateTime.month(.abbreviated).year())) – \(e.formatted(.dateTime.month(.abbreviated).year()))"
-        }
-        if cal.component(.month, from: s) == cal.component(.month, from: e) {
-            return "\(s.formatted(.dateTime.day())) – \(e.formatted(.dateTime.day().month(.abbreviated).year()))"
-        }
-        return "\(s.formatted(.dateTime.day().month(.abbreviated))) – \(e.formatted(.dateTime.day().month(.abbreviated).year()))"
-    }
+    var dateRangeText: String { DateRange.text(from: start, to: end) }
 
     var days: Int {
         guard let s = DayFormat.date(from: start), let e = DayFormat.date(from: end) else { return 1 }
-        return (Calendar(identifier: .gregorian).dateComponents([.day], from: s, to: e).day ?? 0) + 1
+        return (DayFormat.calendar().dateComponents([.day], from: s, to: e).day ?? 0) + 1
     }
 }
 
@@ -115,14 +105,14 @@ enum TripBuilder {
     /// gap of more than `maxGapDays` between consecutive memories (people
     /// don't post every day of a trip — a week of silence is still the same
     /// trip). Newest trip first.
-    static func trips(from memories: [Memory], maxGapDays: Int = 7) -> [Trip] {
+    static func trips(from memories: [Memory], plans: [TripPlan] = [], maxGapDays: Int = 7) -> [Trip] {
         let sorted = memories.sorted { ($0.date, $0.createdAt) < ($1.date, $1.createdAt) }
         var trips: [[Memory]] = []
         var lastDay: Date?
         for memory in sorted {
             let day = memory.day
             if let lastDay, let day,
-               let gap = Calendar(identifier: .gregorian).dateComponents([.day], from: lastDay, to: day).day,
+               let gap = DayFormat.calendar().dateComponents([.day], from: lastDay, to: day).day,
                gap <= maxGapDays, !trips.isEmpty {
                 trips[trips.count - 1].append(memory)
             } else {
@@ -133,7 +123,12 @@ enum TripBuilder {
         return trips.reversed().map { group in
             var order: [String] = []
             for m in group where !order.contains(m.countryCode) { order.append(m.countryCode) }
-            return Trip(memories: group, countryCodes: order)
+            // The plan that covers most of this chapter named it.
+            let plan = plans
+                .map { plan in (plan, group.filter(plan.covers).count) }
+                .filter { $0.1 * 2 > group.count }
+                .max { $0.1 < $1.1 }?.0
+            return Trip(memories: group, countryCodes: order, plan: plan)
         }
     }
 }
