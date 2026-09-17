@@ -385,6 +385,9 @@ struct PassportView: View {
         let upcoming = app.upcomingTrips
         let loose = app.savedPlaces.filter { $0.tripId == nil && !$0.done }
         LazyVStack(alignment: .leading, spacing: 14) {
+            if let summary = app.lastImport, !summary.isEmpty {
+                ImportUndoCard(summary: summary)
+            }
             if !upcoming.isEmpty {
                 SectionHeader("Coming up", subtitle: upcoming.count.counted("trip"))
                 ForEach(upcoming) { plan in
@@ -715,6 +718,55 @@ extension CountryMemoriesSheet {
     }
 }
 
+/// "Added from your photos — Undo": the safety net under an import that
+/// creates trips and memories on its own.
+struct ImportUndoCard: View {
+    let summary: AppModel.ImportSummary
+
+    @Environment(AppModel.self) private var app
+    @State private var undoing = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "sparkle.magnifyingglass")
+                .font(.title3)
+                .foregroundStyle(Color.brand)
+                .frame(width: 38, height: 38)
+                .background(Color.brandSoft, in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Added from your photos")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.ink)
+                Text(summary.text)
+                    .font(.caption)
+                    .foregroundStyle(Color.inkSecondary)
+            }
+            Spacer(minLength: 4)
+            Button(undoing ? "Undoing…" : "Undo") {
+                Task {
+                    undoing = true
+                    defer { undoing = false }
+                    do { try await app.undoImport(summary) } catch { app.show(error) }
+                }
+            }
+            .buttonStyle(SecondaryButtonStyle(fullWidth: false))
+            .disabled(undoing)
+            Button {
+                app.dismissImportSummary()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.inkTertiary)
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Keep them")
+        }
+        .card(padding: 12)
+    }
+}
+
 /// A friend's memory as a place you could save: photo, what it was, who went.
 struct FriendPlaceCard: View {
     let memory: Memory
@@ -767,6 +819,26 @@ struct LocalAssetThumbnail: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .task(id: identifier) { image = await LocalAssets.thumbnail(identifier, side: side) }
+            .accessibilityLabel("Photo on this phone")
+    }
+}
+
+/// A photo from this phone filling whatever space it's given — what a memory
+/// imported from the library shows until (or unless) its photos are uploaded.
+struct LocalAssetFill: View {
+    let identifier: String
+    var maxPixel: CGFloat = 600
+    @State private var image: UIImage?
+
+    var body: some View {
+        Color.sunken
+            .overlay {
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill()
+                }
+            }
+            .clipped()
+            .task(id: identifier) { image = await LocalAssets.thumbnail(identifier, side: maxPixel) }
             .accessibilityLabel("Photo on this phone")
     }
 }

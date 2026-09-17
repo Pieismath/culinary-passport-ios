@@ -252,6 +252,18 @@ final class DemoBackend: Backend {
         return memory
     }
 
+    func insertMemories(_ memories: [NewMemory]) async throws -> [Memory] {
+        var saved: [Memory] = []
+        for memory in memories { saved.append(try await insertMemory(memory)) }
+        return saved
+    }
+
+    func deleteMemories(ids: [UUID]) async throws {
+        await wait()
+        let doomed = sync { ids.compactMap { memoriesById[$0] }.filter { $0.userId == me } }
+        for memory in doomed { try await deleteMemory(memory) }
+    }
+
     func updateMemory(id: UUID, _ patch: MemoryPatch) async throws -> Memory {
         await wait()
         let fault = takeFault()
@@ -379,6 +391,16 @@ final class DemoBackend: Backend {
                             notes: plan.notes, createdAt: Date())
         sync { plans.append(made) }
         return made
+    }
+
+    func createTripPlans(_ plans: [NewTripPlan]) async throws -> [TripPlan] {
+        var made: [TripPlan] = []
+        for plan in plans { made.append(try await createTripPlan(plan)) }
+        return made
+    }
+
+    func deleteTripPlans(ids: [UUID]) async throws {
+        for id in ids { try await deleteTripPlan(id: id) }
     }
 
     func updateTripPlan(id: UUID, _ patch: TripPlanPatch) async throws -> TripPlan {

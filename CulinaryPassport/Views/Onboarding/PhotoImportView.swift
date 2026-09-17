@@ -10,6 +10,7 @@ struct PhotoImportView: View {
     @Environment(\.openURL) private var openURL
     @State private var scanner = PhotoLibraryScanner()
     @State private var chosen: Set<String> = []
+    @State private var chosenTrips: Set<UUID> = []
     @State private var saving = false
     @State private var celebrate: [String]?
 
@@ -44,9 +45,17 @@ struct PhotoImportView: View {
         )) { burst in
             StampMomentView(codes: burst.codes) { finish() }
         }
+        #if DEBUG
+        // Screenshot hook: `-open import -scan` runs the scan on arrival.
+        .task {
+            guard ProcessInfo.processInfo.arguments.contains("-scan"), scanner.phase == .idle else { return }
+            await scanner.start(demo: app.isDemo)
+        }
+        #endif
         .onChange(of: scanner.phase) { _, phase in
             if phase == .finished {
                 chosen = Set(newFinds.map(\.code))
+                chosenTrips = Set(scanner.trips.map(\.id))
             }
         }
     }
@@ -178,17 +187,25 @@ struct PhotoImportView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(scanner.found.isEmpty
                          ? "No locations found"
-                         : "Found \(scanner.found.count) place\(scanner.found.count == 1 ? "" : "s")")
+                         : headline)
                         .font(.display)
                         .foregroundStyle(Color.ink)
                     Text(scanner.found.isEmpty
                          ? "Your photos don't have location data (Settings → Privacy → Location Services → Camera). You can still tap the countries you've been to."
-                         : "\(newFinds.count) new for your passport. Untick anything that doesn't belong — like a photo someone sent you.")
+                         : "Untick anything that doesn't belong — a photo someone sent you, or a trip that wasn't yours. Nothing is uploaded, and everything lands private.")
                         .font(.subheadline)
                         .foregroundStyle(Color.inkSecondary)
                 }
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 8, leading: 4, bottom: 8, trailing: 4))
+            }
+
+            if !scanner.trips.isEmpty {
+                Section("Trips") {
+                    ForEach(scanner.trips) { trip in
+                        tripRow(trip)
+                    }
+                }
             }
 
             if !newFinds.isEmpty {
@@ -208,19 +225,75 @@ struct PhotoImportView: View {
         }
         .paperListStyle()
         .safeAreaInset(edge: .bottom) {
-            if !newFinds.isEmpty {
+            if !newFinds.isEmpty || !chosenTrips.isEmpty {
                 Button {
                     Task { await stamp() }
                 } label: {
-                    Text(saving ? "Stamping…" : "Stamp \(chosen.count) countr\(chosen.count == 1 ? "y" : "ies")")
+                    Text(saving ? "Filling your passport…" : actionTitle)
                 }
                 .buttonStyle(.primary)
-                .disabled(chosen.isEmpty || saving)
+                .disabled((chosen.isEmpty && chosenTrips.isEmpty) || saving)
                 .padding(.horizontal, Metrics.gutter)
                 .padding(.vertical, 10)
                 .background(.bar)
             }
         }
+    }
+
+    private var headline: String {
+        scanner.trips.isEmpty
+            ? "Found \(scanner.found.count.counted("country", "countries"))"
+            : "\(scanner.trips.count.counted("trip")) in \(scanner.found.count.counted("country", "countries"))"
+    }
+
+    private var actionTitle: String {
+        switch (chosenTrips.count, chosen.count) {
+        case (0, let stamps): "Stamp \(stamps.counted("country", "countries"))"
+        case (let trips, 0): "Add \(trips.counted("trip"))"
+        case (let trips, let stamps): "Add \(trips.counted("trip")) · \(stamps.counted("stamp"))"
+        }
+    }
+
+    /// One trip the photos describe: where it went, when, and the places in it.
+    private func tripRow(_ trip: PhotoTrip) -> some View {
+        let isOn = chosenTrips.contains(trip.id)
+        return Button {
+            UISelectionFeedbackGenerator().selectionChanged()
+            if isOn { chosenTrips.remove(trip.id) } else { chosenTrips.insert(trip.id) }
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(trip.flags).font(.subheadline)
+                        Text(trip.title)
+                            .font(.headline)
+                            .foregroundStyle(Color.ink)
+                            .lineLimit(1)
+                    }
+                    Text("\(trip.dateRangeText) · \(trip.days.counted("day"))")
+                        .font(.caption)
+                        .foregroundStyle(Color.inkSecondary)
+                    Text(trip.stops.map(\.title).joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(Color.inkTertiary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 6)
+                HStack(spacing: -10) {
+                    ForEach(trip.sampleIds.prefix(3), id: \.self) { id in
+                        LocalAssetThumbnail(identifier: id, side: 34)
+                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.card, lineWidth: 2))
+                    }
+                }
+                Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isOn ? Color.brand : Color.inkTertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(Color.card)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 
     private func foundRow(_ found: PhotoLibraryScanner.Found, selectable: Bool) -> some View {
@@ -277,6 +350,9 @@ struct PhotoImportView: View {
                            lastVisited: DayFormat.string(from: $0.last),
                            source: .photos)
             })
+            // Trips and the places in them, private and photo-less — the
+            // pictures stay on the phone until they're added on purpose.
+            try await app.importPhotoTrips(scanner.trips.filter { chosenTrips.contains($0.id) })
             // Refresh dates on countries already stamped too — photos often
             // know an earlier first visit than a manual stamp did.
             let known = alreadyStamped.map {
@@ -285,7 +361,13 @@ struct PhotoImportView: View {
             }
             if !known.isEmpty { try? await app.addStamps(known) }
             UINotificationFeedbackGenerator().notificationOccurred(.success)
-            celebrate = picks.map(\.code)
+            if picks.isEmpty {
+                // Nothing new to stamp — the trips are the news.
+                app.celebrate("Added to your passport")
+                finish()
+            } else {
+                celebrate = picks.map(\.code)
+            }
         } catch {
             app.show(error)
         }

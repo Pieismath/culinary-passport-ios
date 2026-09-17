@@ -48,10 +48,20 @@ hygiene, and the app model against the demo backend).
 | **Groups** | A shared globe per group (everyone / all of us / me), leaderboard, and a chat for planning — share memories, react, reply, 🎲 *where should we go?* |
 | **Passport** | Stats and continent progress, yearly goal, bucket list, the stamp book, trips — the ones you're planning and the ones you've been on — a map, Year in Travel, settings. |
 
-Ways into a passport: **scan the photo library** (locations are read
-on-device; nothing is uploaded — only the countries you pick), tick countries
-on a checklist, or add a memory (photos → place and date suggested from the
-photos' metadata → save; a new country plays the stamp moment).
+Ways into a passport: **scan the photo library**, tick countries on a
+checklist, or add a memory (photos → place and date suggested from the photos'
+metadata → save; a new country plays the stamp moment).
+
+### The camera roll is the backlog
+
+The scan reads photo locations on-device and clusters them into **trips and
+the places inside them** — "Japan & South Korea · 9 days · Tokyo · Kyoto ·
+Seoul" — skipping everyday life near the home it infers from where you shoot
+most days (`PhotoTripBuilder`). Accepting them writes trips and one memory per
+place, **private and photo-less**: nothing is uploaded, nothing reaches a
+feed, and the pictures keep showing from the phone (`LocalMemoryPhotos`) until
+you add them to a memory on purpose. The whole import is undoable in one tap
+(`AppModel.ImportSummary`) from the Trips page.
 
 ### Planning is the same object as the log
 
@@ -82,6 +92,7 @@ CulinaryPassport/
     AppModel.swift            @Observable single source of truth for the signed-in
                               user; optimistic mutations, per-account disk snapshot
     PhotoLibraryScanner.swift photo-library → countries (on-device)
+    PhotoTripBuilder.swift    located photos → trips, stops and where home is
     PlaceSearch.swift         Apple Maps place search + "On this day" reminders
   Globe/                      SceneKit globe: tessellated Natural Earth polygons,
                               ribbon borders, small-country dots, themed, fit-to-view camera

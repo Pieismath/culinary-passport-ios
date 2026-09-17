@@ -15,6 +15,7 @@ struct MemoryDetailView: View {
     @State private var reporting = false
     @State private var confirmBlock = false
     @State private var shareImage: UIImage?
+    @State private var attaching = false
 
     init(memory: Memory) {
         self.memory = memory
@@ -29,6 +30,29 @@ struct MemoryDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     PhotoPager(memory: current, aspect: 4.0 / 5.0, cornerRadius: 22, maxPixel: 1800)
+
+                    if isMine, current.photos.isEmpty {
+                        let local = LocalMemoryPhotos.assetIds(for: current)
+                        if !local.isEmpty {
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("\(local.count.counted("photo")) from this day on your phone")
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(Color.ink)
+                                    Text("Only you can see them until you add them.")
+                                        .font(.caption)
+                                        .foregroundStyle(Color.inkSecondary)
+                                }
+                                Spacer(minLength: 4)
+                                Button(attaching ? "Adding…" : "Add") {
+                                    Task { await attach(Array(local.prefix(6))) }
+                                }
+                                .buttonStyle(SecondaryButtonStyle(fullWidth: false))
+                                .disabled(attaching)
+                            }
+                            .card(padding: 12)
+                        }
+                    }
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text(current.displayTitle)
@@ -168,6 +192,28 @@ struct MemoryDetailView: View {
             try await app.backend.setReaction(memoryId: current.id, emoji: emoji, on: on)
         } catch {
             reactions = before
+            app.show(error)
+        }
+    }
+
+    /// Upload the day's photos from this phone onto the memory.
+    private func attach(_ ids: [String]) async {
+        attaching = true
+        defer { attaching = false }
+        var jpegs: [Data] = []
+        for id in ids {
+            guard let (data, _) = await LocalAssets.imageData(id),
+                  let upload = ImageTools.uploadJPEG(from: data) else { continue }
+            jpegs.append(upload.jpeg)
+        }
+        guard !jpegs.isEmpty else {
+            app.show(AppError("Couldn't read those photos."))
+            return
+        }
+        do {
+            try await app.attachPhotos(jpegs, to: current)
+            app.celebrate(jpegs.count.counted("photo") + " added")
+        } catch {
             app.show(error)
         }
     }

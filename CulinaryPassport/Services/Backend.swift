@@ -27,6 +27,9 @@ protocol Backend: AnyObject {
     func memories(ids: [UUID]) async throws -> [Memory]
     func memories(countryCode: String, userIds: [UUID]) async throws -> [Memory]
     func insertMemory(_ memory: NewMemory) async throws -> Memory
+    /// Bulk create, for the photo-library import (one round trip, not fifty).
+    func insertMemories(_ memories: [NewMemory]) async throws -> [Memory]
+    func deleteMemories(ids: [UUID]) async throws
     func updateMemory(id: UUID, _ patch: MemoryPatch) async throws -> Memory
     func deleteMemory(_ memory: Memory) async throws
     func uploadPhoto(_ jpeg: Data) async throws -> String
@@ -44,6 +47,8 @@ protocol Backend: AnyObject {
     // ── Trips + saved places ─────────────────────────────────────────────────
     func tripPlans() async throws -> [TripPlan]
     func createTripPlan(_ plan: NewTripPlan) async throws -> TripPlan
+    func createTripPlans(_ plans: [NewTripPlan]) async throws -> [TripPlan]
+    func deleteTripPlans(ids: [UUID]) async throws
     func updateTripPlan(id: UUID, _ patch: TripPlanPatch) async throws -> TripPlan
     func deleteTripPlan(id: UUID) async throws
     func savedPlaces() async throws -> [SavedPlace]

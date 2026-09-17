@@ -213,6 +213,70 @@ final class TravelModelTests: XCTestCase {
         XCTAssertTrue(sameMonth.contains("6") && sameMonth.contains("21") && sameMonth.contains("2027"), sameMonth)
     }
 
+    // ── Photos → trips ───────────────────────────────────────────────────────
+
+    private func photos(_ code: String, _ lat: Double, _ lng: Double, from: String, days: Int,
+                        perDay: Int = 4) -> [LocatedPhoto] {
+        var out: [LocatedPhoto] = []
+        let start = DayFormat.date(from: from) ?? Date()
+        for day in 0..<days {
+            for shot in 0..<perDay {
+                let when = start.addingTimeInterval(Double(day) * 86_400 + Double(shot) * 900)
+                out.append(LocatedPhoto(id: "\(code)-\(day)-\(shot)", date: when,
+                                        lat: lat + Double(shot) * 0.001, lng: lng, countryCode: code))
+            }
+        }
+        return out
+    }
+
+    func testHomeIsWhereYouShootTheMostDays() throws {
+        // 40 days of home life, out-photographed by a two-week holiday.
+        let home = photos("US", 37.77, -122.42, from: "2026-01-01", days: 40, perDay: 2)
+        let holiday = photos("JP", 35.68, 139.69, from: "2026-03-01", days: 14, perDay: 30)
+        let guess = try XCTUnwrap(PhotoTripBuilder.home(in: home + holiday))
+        XCTAssertLessThan(Geo.distanceKm(guess.lat, guess.lng, 37.77, -122.42), 50)
+    }
+
+    func testEverydayLifeAtHomeIsNotATrip() {
+        let home = photos("US", 37.77, -122.42, from: "2026-01-01", days: 40, perDay: 2)
+        let trips = PhotoTripBuilder.trips(from: home, home: (37.77, -122.42))
+        XCTAssertTrue(trips.isEmpty, "weekends at home shouldn't become chapters")
+    }
+
+    func testPhotosBecomeTripsWithTheirStops() throws {
+        let home = photos("US", 37.77, -122.42, from: "2026-01-01", days: 30, perDay: 2)
+        let tokyo = photos("JP", 35.68, 139.69, from: "2026-03-01", days: 4, perDay: 8)
+        let kyoto = photos("JP", 34.99, 135.76, from: "2026-03-05", days: 3, perDay: 8)
+        let seoul = photos("KR", 37.56, 126.97, from: "2026-03-08", days: 2, perDay: 8)
+        // Months later, a separate trip.
+        let lisbon = photos("PT", 38.72, -9.14, from: "2026-07-02", days: 3, perDay: 6)
+
+        let trips = PhotoTripBuilder.trips(from: home + tokyo + kyoto + seoul + lisbon,
+                                           home: (37.77, -122.42))
+        XCTAssertEqual(trips.count, 2, "one run in spring, one in summer")
+        let spring = try XCTUnwrap(trips.last)                    // newest first
+        XCTAssertEqual(spring.countryCodes, ["JP", "KR"])
+        XCTAssertEqual(spring.stops.count, 3, "Tokyo, Kyoto, Seoul")
+        XCTAssertEqual(spring.stops.map(\.countryCode), ["JP", "JP", "KR"], "in the order visited")
+        XCTAssertEqual(spring.photoCount, tokyo.count + kyoto.count + seoul.count)
+        XCTAssertEqual(spring.days, 9)
+        XCTAssertEqual(trips.first?.countryCodes, ["PT"])
+    }
+
+    func testStrayPhotosDontMakeATrip() {
+        let stray = photos("FR", 48.85, 2.35, from: "2026-05-01", days: 1, perDay: 2)
+        XCTAssertTrue(PhotoTripBuilder.trips(from: stray, home: (37.77, -122.42)).isEmpty)
+    }
+
+    func testNearbyPhotosAreOneStop() throws {
+        // Two Paris neighbourhoods, 6 km apart: one stop, not two.
+        let louvre = photos("FR", 48.86, 2.33, from: "2026-05-01", days: 2, perDay: 6)
+        let marais = photos("FR", 48.86, 2.41, from: "2026-05-03", days: 2, perDay: 6)
+        let trip = try XCTUnwrap(PhotoTripBuilder.trips(from: louvre + marais, home: nil).first)
+        XCTAssertEqual(trip.stops.count, 1)
+        XCTAssertEqual(trip.stops.first?.photoCount, louvre.count + marais.count)
+    }
+
     func testTripsSplitOnGaps() {
         let trips = TripBuilder.trips(from: [
             memory("JP", "2024-04-09"), memory("JP", "2024-04-12"), memory("KR", "2024-04-16"),
@@ -517,6 +581,40 @@ final class AppModelTests: XCTestCase {
 
         await app.toggleSavedPlace(from: memory)
         XCTAssertNil(app.savedPlace(from: memory), "tapping again unsaves it")
+    }
+
+    func testImportingPhotoTripsFillsThePassportPrivately() async throws {
+        let app = await signedInModel()
+        let stop = PhotoStop(countryCode: "MA", lat: 31.63, lng: -7.99,
+                             first: DayFormat.date(from: "2023-06-18") ?? Date(),
+                             last: DayFormat.date(from: "2023-06-21") ?? Date(),
+                             photoCount: 60, sampleIds: [], city: "Marrakech")
+        let trip = PhotoTrip(stops: [stop], countryCodes: ["MA"])
+        let memoriesBefore = app.memories.count
+
+        let summary = try await app.importPhotoTrips([trip])
+        XCTAssertEqual(summary.tripIds.count, 1)
+        XCTAssertEqual(summary.memoryIds.count, 1)
+        XCTAssertEqual(app.memories.count, memoriesBefore + 1)
+
+        let made = try XCTUnwrap(app.memories.first { summary.memoryIds.contains($0.id) })
+        XCTAssertEqual(made.visibility, .private, "an import must not broadcast anything")
+        XCTAssertTrue(made.photos.isEmpty, "photos stay on the phone until they're added")
+        XCTAssertEqual(made.city, "Marrakech")
+        XCTAssertEqual(made.date, "2023-06-18")
+        XCTAssertEqual(try XCTUnwrap(made.lat), 31.63, accuracy: 0.011, "coordinates are coarsened")
+
+        // The trip it made claims the memory it made.
+        let plan = try XCTUnwrap(app.tripPlans.first { summary.tripIds.contains($0.id) })
+        XCTAssertTrue(plan.covers(made))
+        // …along with any memory already logged in that window.
+        XCTAssertTrue(app.memories(on: plan).contains { $0.id == made.id })
+        XCTAssertTrue(app.visitedCodes.contains("MA"))
+
+        try await app.undoImport(summary)
+        XCTAssertEqual(app.memories.count, memoriesBefore)
+        XCTAssertFalse(app.tripPlans.contains { summary.tripIds.contains($0.id) })
+        XCTAssertNil(app.lastImport)
     }
 
     func testDeepLinks() async {

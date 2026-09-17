@@ -183,6 +183,7 @@ final class AppModel {
         stamps = []
         tripPlans = []
         savedPlaces = []
+        lastImport = nil
         bucketList = []
         following = []
         followers = []
@@ -543,6 +544,113 @@ final class AppModel {
             if myId == owner { savedPlaces = before }
             throw error
         }
+    }
+
+    /// Upload photos onto a memory that has none — how an imported memory
+    /// gets its pictures off the phone, when the traveller decides to.
+    func attachPhotos(_ jpegs: [Data], to memory: Memory) async throws {
+        guard let myId, !jpegs.isEmpty else { return }
+        var uploaded: [String] = []
+        do {
+            for jpeg in jpegs {
+                let path = try await backend.uploadPhoto(jpeg)
+                await ImagePipeline.shared.prime(.storage(path), data: jpeg)
+                uploaded.append(path)
+            }
+        } catch {
+            await backend.removePhotos(uploaded)
+            throw error
+        }
+        var draft = MemoryDraft(memory: memory)
+        draft.keptPhotos = memory.photos + uploaded
+        do {
+            let saved = try await backend.updateMemory(id: memory.id, draft.patch(photos: draft.keptPhotos))
+            guard self.myId == myId else { throw CancellationError() }
+            if let index = memories.firstIndex(where: { $0.id == saved.id }) {
+                memories[index] = saved
+            }
+            saveSnapshot()
+        } catch {
+            await backend.removePhotos(uploaded)
+            throw error
+        }
+    }
+
+    /// What one photo-library import created, so it can be undone whole.
+    struct ImportSummary: Codable, Equatable {
+        var tripIds: [UUID] = []
+        var memoryIds: [UUID] = []
+        var countries = 0
+
+        var isEmpty: Bool { tripIds.isEmpty && memoryIds.isEmpty }
+        var text: String {
+            "\(tripIds.count.counted("trip")) · \(memoryIds.count.counted("place"))"
+        }
+    }
+
+    /// The last import, while it's still undoable (this launch).
+    private(set) var lastImport: ImportSummary?
+
+    /// Turn what the photos say into trips and memories. Everything lands
+    /// private and photo-less: the passport fills in, nothing is broadcast,
+    /// and a photo is only uploaded if the traveller later picks it.
+    @discardableResult
+    func importPhotoTrips(_ trips: [PhotoTrip]) async throws -> ImportSummary {
+        guard let myId, !trips.isEmpty else { return ImportSummary() }
+        var drafts: [NewMemory] = []
+        var plans: [NewTripPlan] = []
+        for trip in trips {
+            plans.append(NewTripPlan(id: UUID(), userId: myId, name: "", countryCodes: trip.countryCodes,
+                                     startsOn: DayFormat.string(from: trip.first),
+                                     endsOn: DayFormat.string(from: trip.last),
+                                     groupId: nil, notes: ""))
+            for stop in trip.stops {
+                drafts.append(NewMemory(id: UUID(), userId: myId, countryCode: stop.countryCode,
+                                        title: stop.title, city: stop.city,
+                                        dateTried: DayFormat.string(from: stop.first), notes: "",
+                                        photos: [],
+                                        // A cluster centre is already vague; round it anyway.
+                                        lat: PlaceSearch.coarse(stop.lat), lng: PlaceSearch.coarse(stop.lng),
+                                        visibility: Visibility.private.rawValue))
+            }
+        }
+
+        let savedMemories = try await backend.insertMemories(drafts)
+        let savedPlans = try await backend.createTripPlans(plans)
+        guard self.myId == myId else { throw CancellationError() }
+
+        memories.append(contentsOf: savedMemories)
+        memories.sort { ($0.date, $0.createdAt) > ($1.date, $1.createdAt) }
+        tripPlans.append(contentsOf: savedPlans)
+        let summary = ImportSummary(tripIds: savedPlans.map(\.id), memoryIds: savedMemories.map(\.id),
+                                    countries: Set(savedMemories.map(\.countryCode)).count)
+        lastImport = summary
+        backend.logEvent("photos_imported", props: ["trips": String(savedPlans.count),
+                                                    "memories": String(savedMemories.count)])
+        saveSnapshot()
+        await refreshStamps()
+        MemoryReminders.reschedule(memories: memories)
+        return summary
+    }
+
+    /// Stop offering the undo (the traveller is happy with what landed).
+    func dismissImportSummary() { lastImport = nil }
+
+    /// Put the passport back exactly as it was before the import.
+    func undoImport(_ summary: ImportSummary) async throws {
+        let owner = myId
+        try await backend.deleteMemories(ids: summary.memoryIds)
+        try await backend.deleteTripPlans(ids: summary.tripIds)
+        guard myId == owner else { return }
+        let removed = Set(summary.memoryIds)
+        memories.removeAll { removed.contains($0.id) }
+        let removedTrips = Set(summary.tripIds)
+        tripPlans.removeAll { removedTrips.contains($0.id) }
+        if lastImport == summary { lastImport = nil }
+        backend.logEvent("photo_import_undone", props: nil)
+        saveSnapshot()
+        await refreshStamps()
+        MemoryReminders.reschedule(memories: memories)
     }
 
     /// Save (or unsave) the place a memory is about — how most places get

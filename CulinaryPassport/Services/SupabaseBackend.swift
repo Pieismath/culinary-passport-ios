@@ -199,6 +199,22 @@ final class SupabaseBackend: Backend {
         try await client.from("entries").insert(memory).select().single().execute().value
     }
 
+    func insertMemories(_ memories: [NewMemory]) async throws -> [Memory] {
+        guard !memories.isEmpty else { return [] }
+        var saved: [Memory] = []
+        for chunk in chunks(memories, size: 50) {
+            let rows: [Memory] = try await client.from("entries").insert(chunk).select().execute().value
+            saved += rows
+        }
+        return saved
+    }
+
+    func deleteMemories(ids: [UUID]) async throws {
+        for chunk in chunks(ids) {
+            try await client.from("entries").delete().in("id", values: chunk).execute()
+        }
+    }
+
     func updateMemory(id: UUID, _ patch: MemoryPatch) async throws -> Memory {
         try await client.from("entries").update(patch).eq("id", value: id).select().single().execute().value
     }
@@ -305,6 +321,17 @@ final class SupabaseBackend: Backend {
 
     func createTripPlan(_ plan: NewTripPlan) async throws -> TripPlan {
         try await client.from("trip_plans").insert(plan).select().single().execute().value
+    }
+
+    func createTripPlans(_ plans: [NewTripPlan]) async throws -> [TripPlan] {
+        guard !plans.isEmpty else { return [] }
+        return try await client.from("trip_plans").insert(plans).select().execute().value
+    }
+
+    func deleteTripPlans(ids: [UUID]) async throws {
+        for chunk in chunks(ids) {
+            try await client.from("trip_plans").delete().in("id", values: chunk).execute()
+        }
     }
 
     func updateTripPlan(id: UUID, _ patch: TripPlanPatch) async throws -> TripPlan {

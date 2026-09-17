@@ -10,9 +10,20 @@ struct PhotoPager: View {
 
     @State private var page = 0
 
+    private var localIds: [String] { LocalMemoryPhotos.assetIds(for: memory, limit: 8) }
+
     var body: some View {
         SwiftUI.Group {
-            if memory.photos.isEmpty {
+            if memory.photos.isEmpty, !localIds.isEmpty {
+                // Imported from the library: the photos are on this phone,
+                // not on the server, until they're added on purpose.
+                TabView {
+                    ForEach(localIds, id: \.self) { id in
+                        LocalAssetFill(identifier: id, maxPixel: maxPixel)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: localIds.count > 1 ? .automatic : .never))
+            } else if memory.photos.isEmpty {
                 PostcardPlaceholder(code: memory.countryCode, title: memory.displayTitle)
             } else if memory.photos.count == 1 {
                 StoragePhoto(path: memory.photos[0], maxPixel: maxPixel)
@@ -161,6 +172,8 @@ struct MemoryTile: View {
             .overlay {
                 if let first = memory.photos.first {
                     StoragePhoto(path: first, maxPixel: 500)
+                } else if let local = LocalMemoryPhotos.assetIds(for: memory, limit: 1).first {
+                    LocalAssetFill(identifier: local, maxPixel: 500)
                 } else {
                     PostcardPlaceholder(code: memory.countryCode, title: nil)
                 }
@@ -234,6 +247,9 @@ struct TripCard: View {
                 .overlay {
                     if let cover = trip.coverPhoto {
                         StoragePhoto(path: cover, maxPixel: 900)
+                    } else if let local = trip.memories.lazy
+                        .compactMap({ LocalMemoryPhotos.assetIds(for: $0, limit: 1).first }).first {
+                        LocalAssetFill(identifier: local, maxPixel: 900)
                     } else {
                         PostcardPlaceholder(code: trip.countryCodes.first ?? "UN", title: nil)
                     }

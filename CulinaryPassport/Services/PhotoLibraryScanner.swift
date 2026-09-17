@@ -87,6 +87,14 @@ final class PhotoLibraryScanner {
     var scanned = 0
     var total = 0
     var found: [Found] = []
+    /// Trips the photos describe — runs away from home, and the places in them.
+    var trips: [PhotoTrip] = []
+
+    /// What one scan produced.
+    struct Result {
+        var found: [Found] = []
+        var trips: [PhotoTrip] = []
+    }
 
     nonisolated static var hasReadAccess: Bool {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -119,9 +127,13 @@ final class PhotoLibraryScanner {
                 }
             }
         }.value
-        found = results
+        found = results.found
+        trips = results.trips
         scanned = max(scanned, total)
         phase = .finished
+        // Names for the places found, best effort: without a network the trip
+        // still lands, just labelled by country.
+        await nameStops()
     }
 
     private func runDemo() async {
@@ -147,6 +159,7 @@ final class PhotoLibraryScanner {
             Found(code: code, photoCount: count, first: DayFormat.date(from: first) ?? Date(),
                   last: DayFormat.date(from: last) ?? Date(), trips: trips, samples: [])
         }
+        trips = Self.demoTrips()
         phase = .finished
     }
 
@@ -157,8 +170,24 @@ final class PhotoLibraryScanner {
 
     /// Walks the library oldest → newest. Locations are bucketed into small
     /// cells so the polygon test runs once per place, not once per photo.
+    /// Reverse-geocode each stop to a city name, in the order they'd be read.
+    /// Apple rate-limits this hard, so it's capped and never blocks the result.
+    private func nameStops() async {
+        var budget = 40
+        for tripIndex in trips.indices {
+            for stopIndex in trips[tripIndex].stops.indices where budget > 0 {
+                guard !cancellation.isCancelled else { return }
+                let stop = trips[tripIndex].stops[stopIndex]
+                budget -= 1
+                let place = await PlaceSearch.reverseGeocode(latitude: stop.lat, longitude: stop.lng)
+                guard !place.city.isEmpty else { continue }
+                trips[tripIndex].stops[stopIndex].city = place.city
+            }
+        }
+    }
+
     nonisolated static func scanLibrary(cancellation: ScanCancellation = ScanCancellation(),
-                                        progress: @escaping (Int, Int, [Found]) -> Void) -> [Found] {
+                                        progress: @escaping (Int, Int, [Found]) -> Void) -> Result {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
@@ -176,6 +205,8 @@ final class PhotoLibraryScanner {
         var byCode: [String: Accumulator] = [:]
         var cellCache: [Int64: String] = [:]
         var missCells = Set<Int64>()
+        var located: [LocatedPhoto] = []
+        located.reserveCapacity(min(total, 40_000))
 
         func snapshot() -> [Found] {
             byCode.map { code, acc in
@@ -229,13 +260,38 @@ final class PhotoLibraryScanner {
             acc.lastDate = date
             acc.ids.append(asset.localIdentifier)
             byCode[code] = acc
+            located.append(LocatedPhoto(id: asset.localIdentifier, date: date,
+                                        lat: lat, lng: lng, countryCode: code))
         }
 
         let results = snapshot()
-        guard !cancellation.isCancelled else { return results }
-        LocalPhotoIndex.save(byCode.mapValues { sample($0.ids, count: 120) })
+        guard !cancellation.isCancelled else { return Result(found: results) }
+        LocalPhotoIndex.save(byCode.mapValues { sample($0.ids, count: 120) }, located: located)
+        let trips = PhotoTripBuilder.trips(from: located, home: PhotoTripBuilder.home(in: located))
         progress(total, total, results)
-        return results
+        return Result(found: results, trips: trips)
+    }
+
+    /// Trips for the fixtures: two real-looking runs with their places.
+    private static func demoTrips() -> [PhotoTrip] {
+        func stop(_ code: String, _ city: String, _ lat: Double, _ lng: Double,
+                  _ first: String, _ last: String, _ count: Int) -> PhotoStop {
+            PhotoStop(countryCode: code, lat: lat, lng: lng,
+                      first: DayFormat.date(from: first) ?? Date(),
+                      last: DayFormat.date(from: last) ?? Date(),
+                      photoCount: count, sampleIds: [], city: city)
+        }
+        let europe = PhotoTrip(stops: [
+            stop("DE", "Berlin", 52.52, 13.40, "2022-05-08", "2022-05-10", 96),
+            stop("CZ", "Prague", 50.08, 14.44, "2022-05-11", "2022-05-15", 131),
+            stop("AT", "Vienna", 48.21, 16.37, "2022-05-16", "2022-05-18", 48),
+            stop("HU", "Budapest", 47.50, 19.04, "2022-05-19", "2022-05-23", 77),
+        ], countryCodes: ["DE", "CZ", "AT", "HU"])
+        let italy = PhotoTrip(stops: [
+            stop("IT", "Rome", 41.90, 12.50, "2025-05-01", "2025-05-04", 143),
+            stop("IT", "Florence", 43.77, 11.26, "2025-05-05", "2025-05-06", 119),
+        ], countryCodes: ["IT"])
+        return [italy, europe]
     }
 
     /// Evenly spaced picks across the whole run, so samples span every visit.
@@ -270,9 +326,22 @@ enum LocalPhotoIndex {
         return base.appendingPathComponent("local-photo-index.json")
     }
 
-    static func save(_ index: [String: [String]]) {
+    /// `code` → photos in that country, and `code|yyyy-MM-dd` → that day's,
+    /// so a memory can offer the photos taken where and when it happened.
+    static func save(_ index: [String: [String]], located: [LocatedPhoto] = []) {
+        var index = index
+        var byDay: [String: [String]] = [:]
+        for photo in located {
+            byDay["\(photo.countryCode)|\(DayFormat.string(from: photo.date))", default: []].append(photo.id)
+        }
+        for (key, ids) in byDay { index[key] = PhotoLibraryScanner.sample(ids, count: 40) }
         guard let data = try? JSONEncoder().encode(index) else { return }
         try? data.write(to: url, options: [.atomic, .completeFileProtection])
+    }
+
+    /// Photos taken in this country on this day (from the last scan).
+    static func assetIds(for code: String, on day: String) -> [String] {
+        assetIds(for: "\(code)|\(day)")
     }
 
     static func assetIds(for code: String) -> [String] {
@@ -284,6 +353,17 @@ enum LocalPhotoIndex {
 
     static func clear() {
         try? FileManager.default.removeItem(at: url)
+    }
+}
+
+/// Photos on this phone from where and when a memory happened. The library
+/// import deliberately uploads nothing, so this is what fills those memories
+/// in — on this device, for this traveller's eyes only.
+enum LocalMemoryPhotos {
+    static func assetIds(for memory: Memory, limit: Int = 12) -> [String] {
+        guard memory.photos.isEmpty, PhotoLibraryScanner.hasReadAccess else { return [] }
+        return Array(LocalPhotoIndex.assetIds(for: memory.countryCode,
+                                              on: String(memory.date.prefix(10))).prefix(limit))
     }
 }
 
