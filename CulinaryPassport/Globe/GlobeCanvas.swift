@@ -2,21 +2,53 @@ import SwiftUI
 import SceneKit
 import simd
 
-/// Reusable SceneKit globe: ocean sphere + tinted country caps + hairline
-/// borders, recolored via a closure and reporting taps. Shared by the personal
-/// globe (GlobeSceneView) and the group globe (GroupGlobeView).
+/// Colors for one globe appearance. SceneKit materials don't resolve dynamic
+/// UIColors, so light and dark are explicit and re-applied on change.
+struct GlobeStyle: Equatable {
+    let isDark: Bool
+
+    init(_ scheme: ColorScheme) { isDark = scheme == .dark }
+
+    var ocean: UIColor { isDark ? UIColor(rgb: 0x1B2833) : UIColor(red: 0.85, green: 0.89, blue: 0.92, alpha: 1) }
+    /// Untouched land.
+    var land: UIColor { isDark ? UIColor(rgb: 0x3A362E) : UIColor(rgb: 0xDDD6C7) }
+    var border: UIColor {
+        isDark ? UIColor(rgb: 0x9A907E, alpha: 0.9) : UIColor(red: 0.34, green: 0.29, blue: 0.21, alpha: 0.92)
+    }
+    var selected: UIColor { isDark ? UIColor(rgb: 0xF6F1E7) : UIColor(red: 0.24, green: 0.19, blue: 0.13, alpha: 0.95) }
+    var bucket: UIColor { isDark ? UIColor(rgb: 0xE4AE55) : UIColor(rgb: 0xD9A04A) }
+    var shared: UIColor { isDark ? UIColor(rgb: 0xA58BEA) : UIColor(rgb: 0x8B6FD8) }
+
+    /// Visited tint that deepens with every memory, saturating around five.
+    func visited(_ tint: UIColor, memories: Int, selected: Bool) -> UIColor {
+        let depth = min(0.24, CGFloat(max(0, memories - 1)) * 0.06)
+        let base = tint.composited(alpha: min(0.95, (isDark ? 0.78 : 0.68) + depth), over: ocean)
+        return selected ? highlight(base) : base
+    }
+
+    func untouched(selected: Bool) -> UIColor {
+        selected ? highlight(land) : land
+    }
+
+    func bucketListed(selected: Bool) -> UIColor {
+        let base = bucket.composited(alpha: isDark ? 0.55 : 0.5, over: land)
+        return selected ? highlight(base) : base
+    }
+
+    func highlight(_ color: UIColor) -> UIColor {
+        self.selected.composited(alpha: isDark ? 0.18 : 0.16, over: color)
+    }
+}
+
+/// Reusable SceneKit globe: ocean sphere, tinted country caps, ribbon borders,
+/// and dots for places too small for polygons. Recolored via a closure; taps,
+/// long presses and fly-to requests flow back to SwiftUI.
 ///
-/// Interaction is map-style, NOT SceneKit's built-in arcball: the camera never
-/// moves — one finger rotates the GLOBE (yaw unbounded, pitch clamped at the
-/// poles, north always up, flick inertia), two fingers pinch-zoom the camera
-/// distance. SceneKit's `allowsCameraControl` is deliberately unused: its
-/// arcball flips upside down past a pole, which inverts drag direction and
-/// made fly-to landings look rolled.
-///
-/// The SCNView renders transparent so the SwiftUI layer behind it owns the
-/// backdrop (paper gradient, halo, progress chips).
+/// Interaction is map-style, NOT SceneKit's arcball: the camera never moves
+/// sideways — one finger rotates the GLOBE (yaw unbounded, pitch clamped at
+/// the poles, north always up, flick inertia), two fingers pinch the camera
+/// distance.
 struct GlobeCanvas: UIViewRepresentable {
-    /// One-shot request to rotate the globe onto a country (new UUID per request).
     struct FocusRequest: Equatable {
         enum Style {
             case spin   // a couple of full revolutions on the way (the dice)
@@ -25,57 +57,64 @@ struct GlobeCanvas: UIViewRepresentable {
 
         let id: UUID
         let code: String
-        var style: Style = .spin
+        var style: Style = .fly
     }
 
-    /// Cap color for a country code, given whether it's the current selection.
+    var style: GlobeStyle
     var color: (_ code: String, _ selected: Bool) -> UIColor
     @Binding var selected: String?
-    /// Set to a fresh FocusRequest to rotate there; cleared by the caller in onFocusLanded.
     var focusOn: Binding<FocusRequest?> = .constant(nil)
-    /// Fires when the rotation ends: the country code on landing, or nil if the
-    /// user grabbed the globe mid-flight and cancelled it.
+    /// The country code on landing, or nil if the user grabbed the globe mid-flight.
     var onFocusLanded: ((String?) -> Void)? = nil
-    /// Long-press on a country — the "log this cuisine right here" gesture.
     var onLongPress: ((String) -> Void)? = nil
+    /// Small-place dots for places that matter here (visited, bucket list)
+    /// draw full size; the rest recede so Europe isn't a field of rings.
+    var isEmphasized: (String) -> Bool = { _ in true }
+    var interactive = true
 
     func makeCoordinator() -> Coordinator { Coordinator(selected: $selected) }
 
     func makeUIView(context: Context) -> SCNView {
-        let view = SCNView()
-        view.scene = buildScene(into: context.coordinator)
-        view.backgroundColor = .clear // SwiftUI backdrop shows through
+        let view = GlobeSCNView()
+        let coordinator = context.coordinator
+        view.onLayout = { [weak coordinator] size in coordinator?.fit(to: size) }
+        view.scene = buildScene(into: coordinator)
+        view.backgroundColor = .clear
         view.isOpaque = false
         view.antialiasingMode = .multisampling2X
-        view.pointOfView = context.coordinator.cameraNode
+        view.pointOfView = coordinator.cameraNode
+        view.preferredFramesPerSecond = 60
 
-        let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
-        doubleTap.numberOfTapsRequired = 2
-        view.addGestureRecognizer(doubleTap)
+        if interactive {
+            let doubleTap = UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
+            doubleTap.numberOfTapsRequired = 2
+            view.addGestureRecognizer(doubleTap)
 
-        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
-        tap.require(toFail: doubleTap) // maps convention: double-tap zooms, so single-tap waits a beat
-        view.addGestureRecognizer(tap)
+            let tap = UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.handleTap(_:)))
+            tap.require(toFail: doubleTap)
+            view.addGestureRecognizer(tap)
 
-        let hold = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
-        hold.minimumPressDuration = 0.45
-        view.addGestureRecognizer(hold)
+            let hold = UILongPressGestureRecognizer(target: coordinator, action: #selector(Coordinator.handleLongPress(_:)))
+            hold.minimumPressDuration = 0.45
+            view.addGestureRecognizer(hold)
 
-        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
-        pan.maximumNumberOfTouches = 1 // two fingers belong to pinch
-        view.addGestureRecognizer(pan)
+            let pan = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.handlePan(_:)))
+            pan.maximumNumberOfTouches = 1
+            view.addGestureRecognizer(pan)
 
-        let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
-        view.addGestureRecognizer(pinch)
+            let pinch = UIPinchGestureRecognizer(target: coordinator, action: #selector(Coordinator.handlePinch(_:)))
+            view.addGestureRecognizer(pinch)
+        }
 
-        context.coordinator.scnView = view
-        context.coordinator.onLongPress = onLongPress
+        coordinator.scnView = view
+        coordinator.onLongPress = onLongPress
+        coordinator.apply(style: style)
+        recolor(coordinator)
         return view
     }
 
-    /// A CADisplayLink retains its target, so without this the coordinator —
-    /// and through it every country node — outlived the view: each visit to a
-    /// group globe leaked a whole scene.
+    /// A CADisplayLink retains its target; without this the coordinator —
+    /// and every node it holds — outlived the view.
     static func dismantleUIView(_ view: SCNView, coordinator: Coordinator) {
         coordinator.stopTicking()
     }
@@ -83,10 +122,8 @@ struct GlobeCanvas: UIViewRepresentable {
     func updateUIView(_ view: SCNView, context: Context) {
         let coordinator = context.coordinator
         coordinator.onLongPress = onLongPress
-
-        for (code, node) in coordinator.countryNodes {
-            node.geometry?.firstMaterial?.diffuse.contents = color(code, code == selected)
-        }
+        if coordinator.appliedStyle != style { coordinator.apply(style: style) }
+        recolor(coordinator)
         coordinator.showOutline(for: selected)
 
         if let request = focusOn.wrappedValue, request.id != coordinator.lastFocusId {
@@ -95,11 +132,28 @@ struct GlobeCanvas: UIViewRepresentable {
         }
     }
 
+    private func recolor(_ coordinator: Coordinator) {
+        for (code, material) in coordinator.fillMaterials {
+            material.diffuse.contents = color(code, code == selected)
+        }
+        var emphasisChanged = false
+        for code in coordinator.markerNodes.keys {
+            let emphasized = isEmphasized(code) || code == selected
+            if coordinator.markerEmphasis[code] != emphasized {
+                coordinator.markerEmphasis[code] = emphasized
+                emphasisChanged = true
+            }
+        }
+        if emphasisChanged {
+            coordinator.updateMarkerScale()
+            coordinator.refreshRings()
+        }
+    }
+
     private func buildScene(into coordinator: Coordinator) -> SCNScene {
         let scene = SCNScene()
         scene.background.contents = UIColor.clear
 
-        // Everything that rotates lives under globeNode; the camera is fixed.
         let globe = SCNNode()
         globe.name = "globe"
         scene.rootNode.addChildNode(globe)
@@ -107,42 +161,63 @@ struct GlobeCanvas: UIViewRepresentable {
 
         let ocean = SCNSphere(radius: CGFloat(GlobeNodeFactory.oceanRadius))
         ocean.segmentCount = 96
-        ocean.firstMaterial?.diffuse.contents = GlobeViewModel.ocean
-        ocean.firstMaterial?.lightingModel = .constant
+        let oceanMaterial = SCNMaterial()
+        oceanMaterial.lightingModel = .constant
+        ocean.materials = [oceanMaterial]
+        coordinator.oceanMaterial = oceanMaterial
         globe.addChildNode(SCNNode(geometry: ocean))
 
-        for country in CountryStore.all {
-            if let node = GlobeNodeFactory.countryNode(code: country.code, color: color(country.code, false)) {
-                coordinator.countryNodes[country.code] = node
+        for country in CountryStore.all where country.hasShape {
+            if let node = GlobeNodeFactory.countryNode(code: country.code, color: .lightGray),
+               let material = node.geometry?.firstMaterial {
+                coordinator.fillMaterials[country.code] = material
                 globe.addChildNode(node)
             }
         }
 
-        globe.addChildNode(GlobeDecor.bordersNode())
+        let borders = GlobeDecor.bordersNode()
+        coordinator.borderMaterials = borders.childNodes.compactMap { $0.geometry?.firstMaterial }
+        globe.addChildNode(borders)
+
+        for country in CountryStore.markers {
+            let marker = GlobeDecor.markerNode(for: country)
+            coordinator.markerNodes[country.code] = marker.container
+            coordinator.fillMaterials[country.code] = marker.fill
+            coordinator.ringMaterials[country.code] = marker.ring
+            globe.addChildNode(marker.container)
+        }
 
         let camera = SCNCamera()
         camera.fieldOfView = 40
-        camera.zNear = 0.05 // deep zoom brings the surface well inside the default 1.0
+        camera.zNear = 0.05
         let cam = SCNNode()
         cam.camera = camera
-        // Portrait phones: the vertical FOV maps to a ~19° horizontal FOV, so
-        // the whole globe needs ~6.9 units of distance to fit the width with a
-        // paper margin.
         cam.position = SCNVector3(0, 0, Coordinator.defaultCameraZ)
         scene.rootNode.addChildNode(cam)
         coordinator.cameraNode = cam
+        coordinator.updateMarkerScale()
 
         return scene
     }
 
     final class Coordinator: NSObject {
         static let defaultCameraZ: Float = 6.9
-        /// Zoom range: 10.5 shows the globe small; 1.6 puts the surface close
-        /// enough to tap city-state-sized countries comfortably.
         static let minCameraZ: Float = 1.6
-        static let maxCameraZ: Float = 10.5
 
-        var countryNodes: [String: SCNNode] = [:]
+        /// Distance that fits the whole globe (plus a paper margin) in THIS
+        /// view — a full-height phone screen and a 300pt card need different
+        /// distances, or the smaller canvas draws a tiny globe.
+        private(set) var homeZ: Float = Coordinator.defaultCameraZ
+        private var maxCameraZ: Float { homeZ * 1.5 }
+        private var fittedSize: CGSize = .zero
+
+        var fillMaterials: [String: SCNMaterial] = [:]
+        var borderMaterials: [SCNMaterial] = []
+        var ringMaterials: [String: SCNMaterial] = [:]
+        var markerNodes: [String: SCNNode] = [:]
+        var markerEmphasis: [String: Bool] = [:]
+        var oceanMaterial: SCNMaterial?
+        var appliedStyle: GlobeStyle?
         var cameraNode = SCNNode()
         var globeNode: SCNNode?
         weak var scnView: SCNView?
@@ -153,13 +228,10 @@ struct GlobeCanvas: UIViewRepresentable {
         private var outlineNode: SCNNode?
         private var outlineCode: String?
 
-        // ── Orientation state: north can never roll ──────────────────────────
-        // orientation = Rx(pitch) · Ry(yaw). Yaw spins around the earth's axis
-        // (turntable), pitch tilts toward the poles and is clamped, so the
-        // globe can never flip and drags always track the finger.
+        // orientation = Rx(pitch) · Ry(yaw); north can never roll.
         private var yaw: Float = 0
         private var pitch: Float = 0
-        private let pitchLimit: Float = 1.45 // ~83°, matches map apps
+        private let pitchLimit: Float = 1.45
         private var cameraZ: Float = Coordinator.defaultCameraZ
 
         private enum Drive {
@@ -180,6 +252,55 @@ struct GlobeCanvas: UIViewRepresentable {
 
         deinit { displayLink?.invalidate() }
 
+        // ── Framing ──────────────────────────────────────────────────────────
+
+        func fit(to size: CGSize) {
+            guard size.width > 0, size.height > 0, size != fittedSize else { return }
+            fittedSize = size
+            let vertical = Float(40 * Double.pi / 180)
+            let aspect = Float(size.width / size.height)
+            let horizontal = 2 * atan(tan(vertical / 2) * aspect)
+            let limiting = min(vertical, horizontal)
+            let margin: Float = 1.12
+            let fitted = margin / sin(limiting / 2)
+            let wasHome = abs(cameraZ - homeZ) < 0.01
+            homeZ = fitted
+            // Keep a user's zoom; re-frame only if they were at home.
+            if wasHome, case .idle = drive {
+                cameraZ = homeZ
+                cameraNode.position.z = cameraZ
+                updateMarkerScale()
+            }
+        }
+
+        // ── Style ────────────────────────────────────────────────────────────
+
+        func apply(style: GlobeStyle) {
+            appliedStyle = style
+            oceanMaterial?.diffuse.contents = style.ocean
+            for material in borderMaterials { material.diffuse.contents = style.border }
+            refreshRings()
+            // The outline is rebuilt in the new ink on next selection change.
+            if let code = outlineCode {
+                outlineCode = nil
+                showOutline(for: code)
+            }
+        }
+
+        /// Ring ink per dot: selected → heavy ink, receded → faint.
+        func refreshRings() {
+            let style = appliedStyle ?? GlobeStyle(.light)
+            for (code, material) in ringMaterials {
+                if code == outlineCode {
+                    material.diffuse.contents = style.selected
+                } else if markerEmphasis[code] == false {
+                    material.diffuse.contents = style.border.withAlphaComponent(0.35)
+                } else {
+                    material.diffuse.contents = style.border
+                }
+            }
+        }
+
         // ── Gestures ─────────────────────────────────────────────────────────
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -187,24 +308,19 @@ struct GlobeCanvas: UIViewRepresentable {
                 selected.wrappedValue = nil
                 return
             }
+            UISelectionFeedbackGenerator().selectionChanged()
             selected.wrappedValue = (selected.wrappedValue == code) ? nil : code
         }
 
-        /// Maps convention: double-tap zooms a step toward the tapped point
-        /// (recentering it), and zooms back out once you're already deep.
         @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
             guard let spot = latLng(at: gesture.location(in: scnView)) else { return }
             cancelDrive()
             let zoomingOut = cameraZ < 2.0
-            let toZ = zoomingOut ? Self.defaultCameraZ : max(Self.minCameraZ, cameraZ * 0.5)
+            let toZ = zoomingOut ? homeZ : max(Self.minCameraZ, cameraZ * 0.5)
 
             var toYaw = Float(-spot.lng * .pi / 180)
             let toPitch = max(-pitchLimit, min(pitchLimit, Float(spot.lat * .pi / 180)))
-            let twoPi = Float.pi * 2
-            var delta = (toYaw - yaw).truncatingRemainder(dividingBy: twoPi)
-            if delta > .pi { delta -= twoPi }
-            if delta < -.pi { delta += twoPi }
-            toYaw = yaw + delta
+            toYaw = yaw + shortestDelta(from: yaw, to: toYaw)
 
             drive = .animate(fromYaw: yaw, fromPitch: pitch,
                              toYaw: zoomingOut ? yaw : toYaw,
@@ -227,7 +343,7 @@ struct GlobeCanvas: UIViewRepresentable {
             guard let view = scnView else { return }
             switch gesture.state {
             case .began:
-                cancelDrive() // grabbing the globe interrupts inertia / fly
+                cancelDrive()
             case .changed:
                 let t = gesture.translation(in: view)
                 gesture.setTranslation(.zero, in: view)
@@ -254,59 +370,86 @@ struct GlobeCanvas: UIViewRepresentable {
             case .began:
                 cancelDrive()
             case .changed:
-                cameraZ = max(Self.minCameraZ, min(Self.maxCameraZ, cameraZ / Float(gesture.scale)))
+                cameraZ = max(Self.minCameraZ, min(maxCameraZ, cameraZ / Float(gesture.scale)))
                 gesture.scale = 1
                 cameraNode.position.z = cameraZ
+                updateMarkerScale()
             default:
                 break
             }
         }
 
-        /// Content-follows-finger: one point of drag ≈ the arc it covers on
-        /// the visible face. Surface distance is (z − 1), not z — the old
-        /// z-proportional constant over-rotated at deep zoom.
         private func radiansPerPoint(in view: SCNView) -> Float {
             let width = Float(view.bounds.width)
             guard width > 0 else { return 0.005 }
             return max(0.05, cameraZ - 1) / (3.0 * width)
         }
 
+        // ── Hit resolution ───────────────────────────────────────────────────
+
         /// Where on the globe (lat/lng) a screen point touches, or nil
-        /// off-globe. The screen ray is intersected analytically with the globe
-        /// surface. SceneKit mesh hits are deliberately not involved: raised
-        /// border lines, triangulated cap chords, and back faces can otherwise
-        /// move the resolved location away from the pixel the user touched.
+        /// off-globe — an analytic ray/sphere intersection, not mesh hits.
         private func latLng(at point: CGPoint?) -> (lat: Double, lng: Double)? {
             guard let view = scnView, let point, let globe = globeNode else { return nil }
             let nearWorld = view.unprojectPoint(SCNVector3(Float(point.x), Float(point.y), 0))
             let farWorld = view.unprojectPoint(SCNVector3(Float(point.x), Float(point.y), 1))
             let nearLocal = globe.presentation.simdConvertPosition(
-                SIMD3<Float>(nearWorld.x, nearWorld.y, nearWorld.z), from: nil
-            )
+                SIMD3<Float>(nearWorld.x, nearWorld.y, nearWorld.z), from: nil)
             let farLocal = globe.presentation.simdConvertPosition(
-                SIMD3<Float>(farWorld.x, farWorld.y, farWorld.z), from: nil
-            )
+                SIMD3<Float>(farWorld.x, farWorld.y, farWorld.z), from: nil)
             guard let hit = GlobeMath.frontIntersection(
-                rayOrigin: nearLocal,
-                rayDirection: farLocal - nearLocal,
+                rayOrigin: nearLocal, rayDirection: farLocal - nearLocal,
                 radius: Float(GlobeNodeFactory.capRadius)
             ) else { return nil }
             return GlobeMath.latLng(at: hit)
         }
 
         private func countryCode(at point: CGPoint?) -> String? {
-            guard let spot = latLng(at: point) else { return nil }
-            return CountryGeometry.country(atLat: spot.lat, lng: spot.lng)
+            guard let point else { return nil }
+            let polygon = latLng(at: point).flatMap { CountryGeometry.country(atLat: $0.lat, lng: $0.lng) }
+            // Dots sit on top of (or inside) big polygons — Vatican City in
+            // Italy — so a tap right on a dot wins, with a tighter radius
+            // when the finger is also inside a country.
+            if let marker = markerCode(near: point, threshold: polygon == nil ? 18 : 10) {
+                return marker
+            }
+            return polygon
+        }
+
+        private func markerCode(near point: CGPoint, threshold: CGFloat) -> String? {
+            guard let view = scnView, let globe = globeNode else { return nil }
+            let camera = SIMD3<Float>(0, 0, cameraZ)
+            var best: (code: String, distance: CGFloat)?
+            for (code, node) in markerNodes {
+                let world = globe.presentation.simdConvertPosition(node.simdPosition, to: nil)
+                let normal = simd_normalize(world)
+                let toCamera = simd_normalize(camera - world)
+                guard simd_dot(normal, toCamera) > 0.15 else { continue } // far side
+                let projected = view.projectPoint(SCNVector3(world.x, world.y, world.z))
+                let distance = hypot(CGFloat(projected.x) - point.x, CGFloat(projected.y) - point.y)
+                if distance < threshold, best == nil || distance < best!.distance {
+                    best = (code, distance)
+                }
+            }
+            return best?.code
         }
 
         // ── Selection outline ────────────────────────────────────────────────
 
         func showOutline(for code: String?) {
             guard code != outlineCode else { return }
+            let style = appliedStyle ?? GlobeStyle(.light)
+            if let previous = outlineCode {
+                markerNodes[previous]?.childNode(withName: "ring", recursively: false)?.scale = SCNVector3(1, 1, 1)
+            }
             outlineNode?.removeFromParentNode()
             outlineNode = nil
             outlineCode = code
-            if let code, let node = GlobeDecor.outlineNode(code: code) {
+            refreshRings()
+            guard let code else { return }
+            if ringMaterials[code] != nil {
+                markerNodes[code]?.childNode(withName: "ring", recursively: false)?.scale = SCNVector3(1.35, 1, 1.35)
+            } else if let node = GlobeDecor.outlineNode(code: code, color: style.selected) {
                 globeNode?.addChildNode(node)
                 outlineNode = node
             }
@@ -314,11 +457,6 @@ struct GlobeCanvas: UIViewRepresentable {
 
         // ── Focus (spin / fly) ───────────────────────────────────────────────
 
-        /// Rotate the globe so `code`'s centroid faces the camera, north up.
-        /// Landing orientation is yaw = −lng, pitch = +lat — a direct
-        /// construction with no degenerate cases (the old shortest-arc
-        /// quaternion could roll the globe or go NaN near-antipodal, which is
-        /// what "landed upside down" and "then it locked up" were).
         func focus(on code: String, style: FocusRequest.Style, onLanded: ((String?) -> Void)?) {
             guard let country = CountryStore.byCode[code] else {
                 onLanded?(nil)
@@ -327,34 +465,25 @@ struct GlobeCanvas: UIViewRepresentable {
             cancelDrive()
 
             let toPitch = Float(country.centroid.lat * .pi / 180)
-            var toYaw = Float(-country.centroid.lng * .pi / 180)
-
-            // Take the short way around from the current yaw…
-            let twoPi = Float.pi * 2
-            var delta = (toYaw - yaw).truncatingRemainder(dividingBy: twoPi)
-            if delta > .pi { delta -= twoPi }
-            if delta < -.pi { delta += twoPi }
-            toYaw = yaw + delta
+            var toYaw = yaw + shortestDelta(from: yaw, to: Float(-country.centroid.lng * .pi / 180))
 
             let duration: CFTimeInterval
             let haptic: UIImpactFeedbackGenerator.FeedbackStyle
             let toZ: Float
             switch style {
             case .spin:
-                toYaw -= twoPi * 2 // …plus two full revolutions for the dice
+                toYaw -= Float.pi * 4
                 duration = 1.9
                 haptic = .medium
-                toZ = Self.defaultCameraZ // land on the full-globe reveal
+                toZ = country.hasShape ? homeZ : min(homeZ, 3.2)
             case .fly:
                 duration = 0.75
                 haptic = .light
-                // Zoom to fit what you're flying to: Russia stays wide,
-                // Singapore comes in close enough to actually see and tap.
-                toZ = Self.zoom(forSize: CountryGeometry.sizeHint(code))
+                toZ = min(homeZ, country.hasShape ? Self.zoom(forSize: CountryGeometry.sizeHint(code)) : 2.4)
             }
 
-            // Land the country a little ABOVE screen center so the panel that
-            // opens over the bottom half doesn't sit on top of it.
+            // Land a little above center so the panel over the bottom half
+            // doesn't cover it.
             let panelBias = min(0.22, 0.06 * (toZ - 1))
             drive = .animate(fromYaw: yaw, fromPitch: pitch, toYaw: toYaw,
                              toPitch: min(pitchLimit, max(-pitchLimit, toPitch - panelBias)),
@@ -364,8 +493,6 @@ struct GlobeCanvas: UIViewRepresentable {
             startTicking()
         }
 
-        /// Camera distance that frames a country of the given footprint (deg²,
-        /// lat-corrected — see CountryGeometry.sizeHint).
         private static func zoom(forSize area: Double) -> Float {
             switch area {
             case 300...: return 6.9
@@ -376,7 +503,14 @@ struct GlobeCanvas: UIViewRepresentable {
             }
         }
 
-        /// Interrupt whatever motion is running (user grabbed the globe).
+        private func shortestDelta(from: Float, to: Float) -> Float {
+            let twoPi = Float.pi * 2
+            var delta = (to - from).truncatingRemainder(dividingBy: twoPi)
+            if delta > .pi { delta -= twoPi }
+            if delta < -.pi { delta += twoPi }
+            return delta
+        }
+
         private func cancelDrive() {
             if case let .animate(_, _, _, _, _, _, _, _, _, _, onLanded) = drive {
                 onLanded?(nil)
@@ -385,11 +519,20 @@ struct GlobeCanvas: UIViewRepresentable {
             displayLink?.isPaused = true
         }
 
-        // ── Display-link motor (inertia + focus animations) ──────────────────
+        // ── Markers keep a constant on-screen size ───────────────────────────
+
+        func updateMarkerScale() {
+            let base = 0.0034 * (cameraZ - 1) + 0.0012
+            for (code, node) in markerNodes {
+                let s = markerEmphasis[code] == false ? base * 0.62 : base
+                node.scale = SCNVector3(s, s, s)
+            }
+        }
+
+        // ── Display-link motor ───────────────────────────────────────────────
 
         private func startTicking() {
             if displayLink == nil {
-                // Weak trampoline: the link must not own the coordinator.
                 let link = CADisplayLink(target: WeakTicker(self), selector: #selector(WeakTicker.tick))
                 link.add(to: .main, forMode: .common)
                 displayLink = link
@@ -427,14 +570,13 @@ struct GlobeCanvas: UIViewRepresentable {
                 applyOrientation()
 
             case let .animate(fromYaw, fromPitch, toYaw, toPitch, fromZ, toZ, start, duration, code, haptic, onLanded):
-                let raw = Float((now - start) / duration)
-                let t = min(1, max(0, raw))
-                // easeInOut cubic: winds up, coasts, settles
+                let t = min(1, max(0, Float((now - start) / duration)))
                 let eased = t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
                 yaw = fromYaw + (toYaw - fromYaw) * eased
                 pitch = fromPitch + (toPitch - fromPitch) * eased
                 cameraZ = fromZ + (toZ - fromZ) * eased
                 cameraNode.position.z = cameraZ
+                updateMarkerScale()
                 applyOrientation()
                 if t >= 1 {
                     drive = .idle
@@ -450,6 +592,16 @@ struct GlobeCanvas: UIViewRepresentable {
             let qYaw = simd_quatf(angle: yaw, axis: simd_float3(0, 1, 0))
             globeNode?.simdOrientation = qPitch * qYaw
         }
+    }
+}
+
+/// Reports size changes so the camera can frame the globe for this view.
+final class GlobeSCNView: SCNView {
+    var onLayout: ((CGSize) -> Void)?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onLayout?(bounds.size)
     }
 }
 

@@ -32,11 +32,9 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Take a selfie to generate your avatar, and snap your meals.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Find restaurants serving tonight's cuisine near you.</string>
+	<string>Take photos for your travel memories and profile.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Attach photos of your meals.</string>
+	<string>Stampd reads where your photos were taken to find the countries you've visited, and lets you add photos to memories. This happens on your phone; nothing is uploaded unless you post it.</string>
 	<key>SUPABASE_ANON_KEY</key>
 	<string>$(SUPABASE_ANON_KEY)</string>
 	<key>SUPABASE_URL</key>

@@ -14,7 +14,7 @@ enum SocialAuth {
 
     /// Google: presents the provider's web flow and completes the session.
     static func google() async throws {
-        try await SupabaseService.shared.client.auth.signInWithOAuth(
+        try await SupabaseBackend.shared.client.auth.signInWithOAuth(
             provider: .google,
             redirectTo: redirectURL
         )
@@ -22,7 +22,7 @@ enum SocialAuth {
 
     /// Apple: exchange the native identity token for a Supabase session.
     static func apple(idToken: String, rawNonce: String) async throws {
-        try await SupabaseService.shared.client.auth.signInWithIdToken(
+        try await SupabaseBackend.shared.client.auth.signInWithIdToken(
             credentials: .init(provider: .apple, idToken: idToken, nonce: rawNonce)
         )
     }

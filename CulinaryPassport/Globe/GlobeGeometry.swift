@@ -32,9 +32,6 @@ enum CountryGeometry {
     /// consults the interior rings retained in `polygons` above.
     static let rings: [String: [Ring]] = polygons.mapValues { $0.map(\.outer) }
 
-    // Natural Earth 110m sets ISO_A2 = -99 for these; match CountryStore.isoFix.
-    private static let isoFix = ["France": "FR", "Norway": "NO", "Kosovo": "XK"]
-
     private static func load() -> [String: [CountryPolygon]] {
         guard let url = Bundle.main.url(forResource: "countries", withExtension: "geojson"),
               let data = try? Data(contentsOf: url),
@@ -50,9 +47,10 @@ enum CountryGeometry {
             guard let props = feature["properties"] as? [String: Any] else { continue }
             var code = props["ISO_A2"] as? String ?? ""
             if code.count != 2 || code == "-9" {
-                code = isoFix[props["ADMIN"] as? String ?? ""] ?? ""
+                code = CountryStore.isoFix[props["ADMIN"] as? String ?? ""] ?? ""
             }
-            guard code.count == 2, code.allSatisfy({ $0.isUppercase }), code != "AQ" else { continue }
+            // Antarctica is a real destination (and a stamp people are proud of).
+            guard code.count == 2, code.allSatisfy({ $0.isUppercase }) else { continue }
 
             let countryPolygons = countryPolygons(of: feature["geometry"] as? [String: Any])
             guard !countryPolygons.isEmpty else { continue }
@@ -102,6 +100,46 @@ enum CountryGeometry {
             }
         }
         return nil
+    }
+
+    /// The nearest country whose border lies within `km` of the point — for
+    /// photo locations only. The 110m coastline is coarse, so a beach photo
+    /// can land a few kilometres "offshore". Globe taps never use this (a tap
+    /// in the ocean must not select a country).
+    static func nearestCountry(atLat lat: Double, lng: Double, withinKm km: Double) -> String? {
+        let degLat = km / 111.0
+        let degLng = km / max(8.0, 111.0 * cos(lat * .pi / 180))
+        var best: (code: String, distance: Double)?
+        for entry in polygonIndex
+        where lng >= entry.minLng - degLng && lng <= entry.maxLng + degLng
+            && lat >= entry.minLat - degLat && lat <= entry.maxLat + degLat {
+            let d = distanceToRingKm(entry.outer, lat: lat, lng: lng)
+            if d <= km, best == nil || d < best!.distance {
+                best = (entry.code, d)
+            }
+        }
+        return best?.code
+    }
+
+    /// Shortest distance from a point to a ring's edges, in a local
+    /// equirectangular projection (accurate at these short distances).
+    private static func distanceToRingKm(_ ring: Ring, lat: Double, lng: Double) -> Double {
+        let kx = 111.32 * cos(lat * .pi / 180)
+        let ky = 110.57
+        var best = Double.greatestFiniteMagnitude
+        var j = ring.count - 1
+        for i in 0..<ring.count {
+            let ax = (ring[j].x - lng) * kx, ay = (ring[j].y - lat) * ky
+            let bx = (ring[i].x - lng) * kx, by = (ring[i].y - lat) * ky
+            let dx = bx - ax, dy = by - ay
+            let lengthSquared = dx * dx + dy * dy
+            var t = lengthSquared > 0 ? -(ax * dx + ay * dy) / lengthSquared : 0
+            t = max(0, min(1, t))
+            let px = ax + t * dx, py = ay + t * dy
+            best = min(best, (px * px + py * py).squareRoot())
+            j = i
+        }
+        return best
     }
 
     /// Rough footprint of a country's largest ring in lat-corrected deg² —

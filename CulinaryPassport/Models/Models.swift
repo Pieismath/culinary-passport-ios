@@ -1,86 +1,217 @@
 import Foundation
 
-// Mirrors the Supabase schema: web repo supabase/schema.sql + social-schema.sql.
-// Snake-case mapping is handled by the shared JSONDecoder in SupabaseService.
-
-extension Profile {
-    /// Stand-in used while assembling activity items before profiles resolve.
-    static func placeholder(_ id: UUID) -> Profile {
-        Profile(id: id, name: "", color: "#c98a2e", homeCity: "",
-                username: nil, bio: nil, avatarUrl: nil, isPublic: nil,
-                createdAt: nil, yearlyGoal: nil)
-    }
-}
+// Mirrors the Supabase schema (web repo supabase/migrations, travel model in
+// 20260917120000_travel_passport.sql). JSON keys are snake_case on the wire;
+// the shared decoder converts them, so CodingKeys below use camelCase raw
+// values where a Swift name differs from the column's.
 
 struct Profile: Codable, Identifiable, Hashable {
     let id: UUID
     var name: String
     var color: String
-    var homeCity: String
+    var homeCity: String?
+    var homeCountry: String?
     var username: String?
     var bio: String?
     var avatarUrl: String?
     var isPublic: Bool?
-    /// Signup date — "Member since March 2026" on the profile header.
     var createdAt: Date?
-    /// Beli-style "how many cuisines this year?" target. Nil = not set.
+    /// "How many NEW countries this year?" Nil = not set.
     var yearlyGoal: Int?
+
+    var handle: String? { username.flatMap { $0.isEmpty ? nil : "@\($0)" } }
+    var firstName: String { name.split(separator: " ").first.map(String.init) ?? name }
 }
 
-struct Entry: Codable, Identifiable, Hashable {
+/// Who can see a memory. The raw value `groups` predates the travel app; it
+/// means Friends now — mutual follows or anyone you share a group with.
+enum Visibility: String, Codable, CaseIterable, Identifiable {
+    case friends = "groups"
+    case `public` = "public"
+    case `private` = "private"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .friends: "Friends"
+        case .public: "Public"
+        case .private: "Only me"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .friends: "person.2.fill"
+        case .public: "globe"
+        case .private: "lock.fill"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .friends: "People you follow each other with, and your groups."
+        case .public: "Anyone on Stampd, including Discover."
+        case .private: "Just you. It still stamps your passport."
+        }
+    }
+}
+
+/// A travel moment: photos, a place, a date, a few words. Stored as an
+/// `entries` row with kind = 'memory'.
+struct Memory: Codable, Identifiable, Hashable {
     let id: UUID
     let userId: UUID
     var countryCode: String
-    var restaurantName: String
+    var title: String
     var city: String?
-    var dateTried: String // yyyy-mm-dd
-    var rating: Int
+    /// yyyy-MM-dd (entries.date_tried)
+    var date: String
     var notes: String?
-    var signatureDish: String?
     var photos: [String]
-    var wouldReturn: Bool
-    var placeId: String?
     var lat: Double?
     var lng: Double?
-    var visibility: Visibility?
+    var visibility: Visibility
     let createdAt: Date
 
-    enum Visibility: String, Codable { case `public`, groups, `private` }
+    enum CodingKeys: String, CodingKey {
+        case id, userId, countryCode, title, city, notes, photos, lat, lng, visibility, createdAt
+        case date = "dateTried"
+    }
+
+    init(id: UUID, userId: UUID, countryCode: String, title: String, city: String?,
+         date: String, notes: String?, photos: [String], lat: Double?, lng: Double?,
+         visibility: Visibility, createdAt: Date) {
+        self.id = id
+        self.userId = userId
+        self.countryCode = countryCode
+        self.title = title
+        self.city = city
+        self.date = date
+        self.notes = notes
+        self.photos = photos
+        self.lat = lat
+        self.lng = lng
+        self.visibility = visibility
+        self.createdAt = createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        userId = try c.decode(UUID.self, forKey: .userId)
+        countryCode = try c.decode(String.self, forKey: .countryCode)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        city = try c.decodeIfPresent(String.self, forKey: .city)
+        date = try c.decode(String.self, forKey: .date)
+        notes = try c.decodeIfPresent(String.self, forKey: .notes)
+        photos = try c.decodeIfPresent([String].self, forKey: .photos) ?? []
+        lat = try c.decodeIfPresent(Double.self, forKey: .lat)
+        lng = try c.decodeIfPresent(Double.self, forKey: .lng)
+        visibility = (try? c.decode(Visibility.self, forKey: .visibility)) ?? .friends
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+    }
+
+    var country: Country? { CountryStore.byCode[countryCode] }
+
+    /// "Fushimi Inari" / "Kyoto" / "Japan" — the best short name we have.
+    var displayTitle: String {
+        if !title.trimmingCharacters(in: .whitespaces).isEmpty { return title }
+        if let city, !city.isEmpty { return city }
+        return country?.name ?? countryCode
+    }
+
+    /// "Kyoto, Japan" — omits whatever the title already says.
+    var placeLine: String {
+        var parts: [String] = []
+        if let city, !city.isEmpty, city != title { parts.append(city) }
+        parts.append(country?.name ?? countryCode)
+        return parts.joined(separator: ", ")
+    }
+
+    var day: Date? { DayFormat.date(from: date) }
+    var hasCoordinate: Bool { lat != nil && lng != nil }
 }
 
 /// Insert payload — id / created_at come from Postgres defaults.
-struct NewEntry: Codable {
+struct NewMemory: Encodable {
     let userId: UUID
+    let kind = "memory"
     var countryCode: String
-    var restaurantName: String
+    var title: String
     var city: String
     var dateTried: String
-    var rating: Int
     var notes: String
-    var signatureDish: String
-    var wouldReturn: Bool
-    var placeId: String?
+    var photos: [String]
     var lat: Double?
     var lng: Double?
-    var photos: [String] = []
-    var visibility: String = "groups"
+    var visibility: String
 }
 
-/// Update payload for editing an existing entry (id / created_at are immutable).
-struct EntryUpdate: Codable {
+/// Full replacement of the editable fields. Encodes nil coordinates as
+/// explicit nulls — clearing a place must clear the stored coordinates too.
+struct MemoryPatch: Encodable {
     var countryCode: String
-    var restaurantName: String
+    var title: String
     var city: String
     var dateTried: String
-    var rating: Int
     var notes: String
-    var signatureDish: String
-    var wouldReturn: Bool
-    var placeId: String?
+    var photos: [String]
     var lat: Double?
     var lng: Double?
-    var photos: [String] = []
-    var visibility: String = "groups"
+    var visibility: String
+
+    enum CodingKeys: String, CodingKey {
+        case countryCode, title, city, dateTried, notes, photos, lat, lng, visibility
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(countryCode, forKey: .countryCode)
+        try c.encode(title, forKey: .title)
+        try c.encode(city, forKey: .city)
+        try c.encode(dateTried, forKey: .dateTried)
+        try c.encode(notes, forKey: .notes)
+        try c.encode(photos, forKey: .photos)
+        try c.encode(lat, forKey: .lat)
+        try c.encode(lng, forKey: .lng)
+        try c.encode(visibility, forKey: .visibility)
+    }
+}
+
+/// A passport stamp: "been to this country", with or without memories.
+struct Stamp: Codable, Identifiable, Hashable {
+    enum Source: String, Codable { case manual, photos, memory }
+
+    let userId: UUID
+    let countryCode: String
+    var firstVisited: String?
+    var lastVisited: String?
+    var source: Source
+    let createdAt: Date
+
+    var id: String { "\(userId.uuidString)|\(countryCode)" }
+    var country: Country? { CountryStore.byCode[countryCode] }
+
+    /// "2019" or "2019 – 2024", nil when we don't know.
+    var yearsText: String? {
+        let first = firstVisited.map { String($0.prefix(4)) }
+        let last = lastVisited.map { String($0.prefix(4)) }
+        switch (first, last) {
+        case let (f?, l?) where f != l: return "\(f) – \(l)"
+        case let (f?, _): return f
+        case let (nil, l?): return l
+        default: return nil
+        }
+    }
+}
+
+/// One stamp to add in bulk (checklist / photo import).
+struct StampInput: Codable, Hashable {
+    var countryCode: String
+    var firstVisited: String?
+    var lastVisited: String?
+    var source: Stamp.Source
 }
 
 struct Group: Codable, Identifiable, Hashable {
@@ -105,6 +236,7 @@ struct GroupPost: Codable, Identifiable, Hashable {
     let id: UUID
     let groupId: UUID
     let authorId: UUID
+    /// A shared memory (group_posts.entry_id).
     var entryId: UUID?
     var text: String
     var photos: [String]
@@ -126,11 +258,21 @@ struct PostReaction: Codable, Hashable {
     let emoji: String
 }
 
-/// A discover-feed row: an entry paired with its (public) author.
-struct FeedItem: Identifiable, Hashable {
-    let entry: Entry
-    let author: Profile
-    var id: UUID { entry.id }
+/// An emoji reaction on a memory (entry_reactions).
+struct Reaction: Codable, Hashable {
+    let entryId: UUID
+    let userId: UUID
+    let emoji: String
+    let createdAt: Date?
+}
+
+/// A comment on a memory (entry_comments).
+struct Comment: Codable, Identifiable, Hashable {
+    let id: UUID
+    let entryId: UUID
+    let authorId: UUID
+    var text: String
+    let createdAt: Date
 }
 
 struct Follow: Codable, Hashable {
@@ -139,64 +281,63 @@ struct Follow: Codable, Hashable {
     let createdAt: Date
 }
 
-// Insert payloads (ids / timestamps come from Postgres defaults)
+/// A row from the my_activity() RPC.
+struct ActivityRow: Codable, Hashable, Identifiable {
+    enum Kind: String, Codable { case follow, reaction, comment }
 
-struct NewGroupPost: Codable {
-    let groupId: UUID
-    let authorId: UUID
-    var entryId: UUID?
-    var text: String
-    var photos: [String] = []
-}
-
-struct NewComment: Codable {
-    let postId: UUID
-    let authorId: UUID
-    var parentId: UUID?
-    var text: String
-}
-
-// ── Retention/social layer (2026-07-22 migration) ───────────────────────────
-
-/// A restaurant on the user's Want to Try list.
-struct SavedRestaurant: Codable, Identifiable, Hashable {
-    let id: UUID
-    let userId: UUID
-    var restaurantName: String
-    var city: String?
-    var countryCode: String
-    var note: String?
+    let kind: Kind
+    let actorId: UUID
+    let entryId: UUID?
+    let emoji: String?
+    let body: String?
     let createdAt: Date
+
+    var id: String {
+        "\(kind.rawValue)|\(actorId.uuidString)|\(entryId?.uuidString ?? "")|\(emoji ?? "")|\(createdAt.timeIntervalSince1970)"
+    }
 }
 
-/// An emoji reaction on a MEAL (entry_reactions).
-struct EntryReaction: Codable, Hashable {
-    let entryId: UUID
-    let userId: UUID
+/// Tallied emoji on a memory or message: most-used first, then stable.
+struct ReactionTally: Identifiable, Hashable {
     let emoji: String
-    let createdAt: Date?
+    let count: Int
+    let mine: Bool
+    var id: String { emoji }
+
+    static func tally(_ pairs: [(emoji: String, userId: UUID)], me: UUID?) -> [ReactionTally] {
+        Dictionary(grouping: pairs, by: \.emoji)
+            .map { ReactionTally(emoji: $0.key, count: $0.value.count,
+                                 mine: $0.value.contains { $0.userId == me }) }
+            .sorted { ($0.count, $1.emoji) > ($1.count, $0.emoji) }
+    }
 }
 
-/// A comment on a MEAL (entry_comments).
-struct EntryComment: Codable, Identifiable, Hashable {
-    let id: UUID
-    let entryId: UUID
-    let authorId: UUID
-    var text: String
-    let createdAt: Date
-}
+// ── Dates ───────────────────────────────────────────────────────────────────
 
-/// One row in the Activity feed — assembled client-side from follows,
-/// entry reactions, and entry comments aimed at the current user.
-struct ActivityItem: Identifiable, Hashable {
-    enum Kind: Hashable {
-        case followedYou
-        case reacted(emoji: String, entry: Entry)
-        case commented(text: String, entry: Entry)
+/// Calendar days as Postgres `date` strings. POSIX + Gregorian + the device's
+/// time zone: a memory from "12 April" stays on 12 April.
+enum DayFormat {
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    static func string(from date: Date) -> String { formatter.string(from: date) }
+    static func date(from string: String) -> Date? { formatter.date(from: String(string.prefix(10))) }
+
+    /// "12 Apr 2024"
+    static func pretty(_ raw: String) -> String {
+        guard let date = date(from: raw) else { return raw }
+        return date.formatted(.dateTime.day().month(.abbreviated).year())
     }
 
-    let id: String
-    let actor: Profile
-    let kind: Kind
-    let date: Date
+    /// "Apr 2024"
+    static func monthYear(_ raw: String) -> String {
+        guard let date = date(from: raw) else { return raw }
+        return date.formatted(.dateTime.month(.abbreviated).year())
+    }
 }

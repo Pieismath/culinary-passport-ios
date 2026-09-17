@@ -43,7 +43,8 @@ enum GlobeDecor {
 
     private static var borderMesh: Mesh?
 
-    /// Every country ring as ribbons + a hairline, in a single node.
+    /// Every country ring as ribbons + a hairline, in a single node. Colors
+    /// are applied by the canvas (they change with light/dark).
     static func bordersNode() -> SCNNode {
         let mesh: Mesh
         if let borderMesh {
@@ -68,7 +69,7 @@ enum GlobeDecor {
     private static var outlineMeshes: [String: Mesh?] = [:]
 
     /// A darker, wider, slightly-raised outline of one country while selected.
-    static func outlineNode(code: String) -> SCNNode? {
+    static func outlineNode(code: String, color: UIColor) -> SCNNode? {
         let mesh: Mesh?
         if let cached = outlineMeshes[code] {
             mesh = cached
@@ -81,9 +82,64 @@ enum GlobeDecor {
             outlineMeshes[code] = mesh
         }
         guard let mesh else { return nil }
-        let node = SCNNode(geometry: mesh.geometry(color: selectedInk))
+        let node = SCNNode(geometry: mesh.geometry(color: color))
         node.name = "outline"
         return node
+    }
+
+    // ── Dots for places too small for polygons ───────────────────────────────
+
+    struct Marker {
+        let container: SCNNode
+        let fill: SCNMaterial
+        let ring: SCNMaterial
+    }
+
+    private static let markerFill: SCNCylinder = {
+        let disc = SCNCylinder(radius: 1, height: 0.25)
+        disc.radialSegmentCount = 28
+        return disc
+    }()
+
+    private static let markerRing: SCNCylinder = {
+        let disc = SCNCylinder(radius: 1.4, height: 0.12)
+        disc.radialSegmentCount = 28
+        return disc
+    }()
+
+    /// A small disc lying on the surface (a ring of border ink under a fill).
+    /// The container is scaled by the canvas so dots keep a steady on-screen
+    /// size at every zoom.
+    static func markerNode(for country: Country) -> Marker {
+        let position = GlobeMath.vec3(lat: country.centroid.lat, lng: country.centroid.lng, radius: 1.006)
+        let container = SCNNode()
+        container.name = "marker-\(country.code)"
+        container.position = position
+        let normal = simd_normalize(SIMD3<Float>(position.x, position.y, position.z))
+        container.simdOrientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: normal)
+
+        let ringMaterial = constantMaterial(borderInk)
+        let ringGeometry = markerRing.copy() as! SCNCylinder
+        ringGeometry.materials = [ringMaterial]
+        let ring = SCNNode(geometry: ringGeometry)
+        ring.name = "ring"
+        container.addChildNode(ring)
+
+        let fillMaterial = constantMaterial(.lightGray)
+        let fillGeometry = markerFill.copy() as! SCNCylinder
+        fillGeometry.materials = [fillMaterial]
+        let fill = SCNNode(geometry: fillGeometry)
+        fill.position = SCNVector3(0, 0.12, 0)
+        container.addChildNode(fill)
+
+        return Marker(container: container, fill: fillMaterial, ring: ringMaterial)
+    }
+
+    private static func constantMaterial(_ color: UIColor) -> SCNMaterial {
+        let material = SCNMaterial()
+        material.diffuse.contents = color
+        material.lightingModel = .constant
+        return material
     }
 
     // ── Ribbon construction ──────────────────────────────────────────────────

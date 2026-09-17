@@ -1,16 +1,12 @@
 import UIKit
 import UserNotifications
 
-/// v1.2 push wiring: request permission, register with APNs, store the device
-/// token in `device_tokens` so the notify-group edge function can fan out.
-///
-/// NOTE: real delivery needs the Push Notifications capability + an APNs key,
-/// which require a paid Apple Developer account. Until then this registers
-/// gracefully (simulators receive a token on iOS 16+; delivery is stubbed
-/// server-side). Test locally with `xcrun simctl push`.
+/// Notification permission + APNs registration. Remote push delivery needs
+/// the paid developer account's entitlement; local "On this day" reminders
+/// work today.
 enum PushRegistrar {
     /// Ask for permission — only from a moment where the user can see why
-    /// (e.g. turning on "On this day" reminders). Returns whether it's granted.
+    /// (turning on reminders). Returns whether it's granted.
     @discardableResult
     static func requestAndRegister() async -> Bool {
         let granted = (try? await UNUserNotificationCenter.current()
@@ -34,24 +30,52 @@ enum PushRegistrar {
 
     static func didRegister(deviceToken: Data) {
         let token = deviceToken.map { String(format: "%02x", $0) }.joined()
-        Task { try? await SupabaseService.shared.registerDeviceToken(token) }
+        Task { try? await SupabaseBackend.shared.registerDeviceToken(token) }
     }
 }
 
-/// Hook APNs callbacks into the SwiftUI app lifecycle.
-final class AppDelegate: NSObject, UIApplicationDelegate {
-    func application(
-        _ application: UIApplication,
-        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
-    ) {
+/// APNs callbacks + notification taps into the SwiftUI lifecycle.
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
+
+    func application(_ application: UIApplication,
+                     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         PushRegistrar.didRegister(deviceToken: deviceToken)
     }
 
-    func application(
-        _ application: UIApplication,
-        didFailToRegisterForRemoteNotificationsWithError error: Error
-    ) {
-        // Expected without the push entitlement — fine during scaffolding.
-        print("APNs registration failed: \(error.localizedDescription)")
+    func application(_ application: UIApplication,
+                     didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        // Expected without the push entitlement.
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse) async {
+        guard let raw = response.notification.request.content.userInfo["url"] as? String,
+              let url = URL(string: raw) else { return }
+        await MainActor.run {
+            // A cold launch from the notification can land before any view
+            // subscribes, so the link is also parked for the app to collect.
+            DeepLinkInbox.pending = url
+            NotificationCenter.default.post(name: .stampdOpenURL, object: url)
+        }
+    }
+}
+
+@MainActor
+enum DeepLinkInbox {
+    static var pending: URL?
+
+    static func take() -> URL? {
+        defer { pending = nil }
+        return pending
     }
 }
