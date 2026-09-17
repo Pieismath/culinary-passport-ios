@@ -36,18 +36,29 @@ final class SupabaseService {
     private static let decoder: JSONDecoder = {
         let d = JSONDecoder()
         d.keyDecodingStrategy = .convertFromSnakeCase
+        // Supabase timestamps carry fractional seconds; plain .iso8601 chokes
+        // on them. Format styles are value types (thread-safe) and built once,
+        // rather than a new ISO8601DateFormatter for every date in every row.
+        let fractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+        let whole = Date.ISO8601FormatStyle()
         d.dateDecodingStrategy = .custom { decoder in
-            // Supabase timestamps carry fractional seconds; plain .iso8601 chokes on them.
             let s = try decoder.singleValueContainer().decode(String.self)
-            let fmt = ISO8601DateFormatter()
-            fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = fmt.date(from: s) { return date }
-            fmt.formatOptions = [.withInternetDateTime]
-            if let date = fmt.date(from: s) { return date }
+            if let date = try? fractional.parse(s) { return date }
+            if let date = try? whole.parse(s) { return date }
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Bad date: \(s)"))
         }
         return d
     }()
+
+    /// Strip characters that are syntax inside a PostgREST `or=(…)` filter
+    /// (`,` `(` `)` `"` `:` `\`) or LIKE wildcards (`%` `*`). Unescaped, a
+    /// search for "smith, j" produced a malformed filter and a 400.
+    static func sanitizedSearchTerm(_ raw: String) -> String {
+        let reserved = Set(",()\":\\%*")
+        return String(raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .drop(while: { $0 == "@" })
+            .filter { !reserved.contains($0) })
+    }
 
     // ── Data access (grow these as views land) ──────────────────────────────
 
@@ -131,8 +142,13 @@ final class SupabaseService {
             .select().single().execute().value
     }
 
+    /// The RPC answers NULL for a wrong code (so the server can count misses
+    /// and stop guessing after ten an hour) and raises only for the limit.
     func joinGroup(inviteCode: String) async throws -> UUID {
-        try await client.rpc("join_group_by_invite", params: ["code": inviteCode]).execute().value
+        let gid: UUID? = try await client.rpc("join_group_by_invite", params: ["code": inviteCode])
+            .execute().value
+        guard let gid else { throw AppError("That code didn't match a group. Check it with whoever sent it.") }
+        return gid
     }
 
     func groupMemberIds(groupId: UUID) async throws -> [UUID] {
@@ -426,9 +442,11 @@ final class SupabaseService {
     }
 
     func searchPublicProfiles(_ query: String) async throws -> [Profile] {
-        try await client.from("profiles").select()
+        let term = Self.sanitizedSearchTerm(query)
+        guard term.count >= 2 else { return [] }
+        return try await client.from("profiles").select()
             .eq("is_public", value: true)
-            .or("name.ilike.%\(query)%,username.ilike.%\(query)%")
+            .or("name.ilike.%\(term)%,username.ilike.%\(term)%")
             .limit(20)
             .execute().value
     }

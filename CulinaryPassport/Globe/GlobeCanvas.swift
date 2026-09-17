@@ -73,6 +73,13 @@ struct GlobeCanvas: UIViewRepresentable {
         return view
     }
 
+    /// A CADisplayLink retains its target, so without this the coordinator —
+    /// and through it every country node — outlived the view: each visit to a
+    /// group globe leaked a whole scene.
+    static func dismantleUIView(_ view: SCNView, coordinator: Coordinator) {
+        coordinator.stopTicking()
+    }
+
     func updateUIView(_ view: SCNView, context: Context) {
         let coordinator = context.coordinator
         coordinator.onLongPress = onLongPress
@@ -382,7 +389,8 @@ struct GlobeCanvas: UIViewRepresentable {
 
         private func startTicking() {
             if displayLink == nil {
-                let link = CADisplayLink(target: self, selector: #selector(tick))
+                // Weak trampoline: the link must not own the coordinator.
+                let link = CADisplayLink(target: WeakTicker(self), selector: #selector(WeakTicker.tick))
                 link.add(to: .main, forMode: .common)
                 displayLink = link
             }
@@ -390,7 +398,12 @@ struct GlobeCanvas: UIViewRepresentable {
             displayLink?.isPaused = false
         }
 
-        @objc private func tick() {
+        func stopTicking() {
+            displayLink?.invalidate()
+            displayLink = nil
+        }
+
+        @objc fileprivate func tick() {
             let now = CACurrentMediaTime()
             let dt = Float(min(now - lastTick, 1.0 / 30.0))
             lastTick = now
@@ -438,4 +451,11 @@ struct GlobeCanvas: UIViewRepresentable {
             globeNode?.simdOrientation = qPitch * qYaw
         }
     }
+}
+
+/// Display-link target that holds its coordinator weakly.
+private final class WeakTicker: NSObject {
+    weak var coordinator: GlobeCanvas.Coordinator?
+    init(_ coordinator: GlobeCanvas.Coordinator) { self.coordinator = coordinator }
+    @objc func tick() { coordinator?.tick() }
 }

@@ -131,7 +131,7 @@ struct PhotoCropSheet: View {
     private func render() -> Data? {
         let output: CGFloat = 512
         let ratio = output / viewport
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: output, height: output))
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: output, height: output), format: .pixels)
 
         return renderer.image { context in
             context.cgContext.saveGState()

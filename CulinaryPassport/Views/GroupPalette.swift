@@ -17,6 +17,15 @@ enum GroupPalette {
         "#a8763e", // brown
     ]
 
+    /// Same color for the same id on every launch and every device. (Swift's
+    /// `hashValue` is randomly seeded per process, so a hash-based pick made
+    /// group monograms change color each time the app started.)
+    static func stableColor(for id: UUID) -> String {
+        let bytes = withUnsafeBytes(of: id.uuid) { Array($0) }
+        let sum = bytes.reduce(0) { $0 &+ Int($1) }
+        return fallbacks[sum % fallbacks.count]
+    }
+
     static func assign(memberIds: [UUID], profiles: [UUID: Profile]) -> [UUID: String] {
         var used = Set<String>()
         var assigned: [UUID: String] = [:]

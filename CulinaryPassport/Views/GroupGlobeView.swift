@@ -168,9 +168,8 @@ struct GroupAvatarView: View {
 
     private var monogram: some View {
         ZStack {
-            Circle().fill(Color(uiColor: UIColor(hex: GroupPalette.fallbacks[
-                abs(group.id.hashValue) % GroupPalette.fallbacks.count
-            ]) ?? .systemGray3).opacity(0.85))
+            Circle().fill(Color(uiColor: UIColor(hex: GroupPalette.stableColor(for: group.id))
+                ?? .systemGray3).opacity(0.85))
             Text(String(group.name.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased())
                 .font(.system(size: size * 0.44, weight: .semibold))
                 .foregroundStyle(.white)

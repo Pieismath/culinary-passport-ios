@@ -29,14 +29,19 @@ struct CulinaryPassportApp: App {
                         .zIndex(1)
                         .transition(.opacity)
                         .task {
-                            try? await Task.sleep(for: .milliseconds(900))
-                            withAnimation(.easeOut(duration: 0.3)) { showSplash = false }
+                            // Long enough for the wordmark to land, short enough
+                            // not to tax every cold launch.
+                            try? await Task.sleep(for: .milliseconds(450))
+                            withAnimation(.easeOut(duration: 0.25)) { showSplash = false }
                         }
                 }
             }
             // The password-reset email links back here; the SDK turns the URL
             // into a recovery session, after which the user sets a new password.
+            // Only that link: an OAuth callback also yields a session, and
+            // must not pop a "set a new password" sheet.
             .onOpenURL { url in
+                guard url.host == "reset-password" else { return }
                 Task {
                     if (try? await SupabaseService.shared.client.auth.session(from: url)) != nil {
                         showPasswordReset = true
@@ -75,18 +80,20 @@ final class SessionStore {
 
     @MainActor
     private func observeAuth() async {
-        // -noPush: headless test runs can't tap the OS permission dialog
-        let skipPush = ProcessInfo.processInfo.arguments.contains("-noPush")
         for await state in SupabaseService.shared.client.auth.authStateChanges {
             if state.event == .signedOut { DiskCache.clear() }
             if state.event == .signedIn { SupabaseService.shared.logEvent("app_open") }
             isSignedIn = state.session != nil
-            // .initialSession can now carry an expired session (offline
-            // relaunch): still show the app — autoRefresh will replace it
-            // (tokenRefreshed) or end it (signedOut) — but hold side effects
-            // like the push permission prompt until the session is valid.
+            // .initialSession can carry an expired session (offline relaunch):
+            // still show the app — autoRefresh replaces it (tokenRefreshed) or
+            // ends it (signedOut) — but hold side effects until it's valid.
+            // Notification permission is never requested here: a cold prompt
+            // at sign-in (for pushes that don't exist yet) burns the one ask.
+            // It's requested in context; this only refreshes an existing grant.
             let sessionIsValid = state.session.map { !$0.isExpired } ?? false
-            if sessionIsValid && !skipPush { PushRegistrar.requestAndRegister() }
+            if sessionIsValid && state.event != .tokenRefreshed {
+                PushRegistrar.registerIfAuthorized()
+            }
         }
     }
 }

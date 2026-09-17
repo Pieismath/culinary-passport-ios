@@ -9,11 +9,25 @@ import UserNotifications
 /// gracefully (simulators receive a token on iOS 16+; delivery is stubbed
 /// server-side). Test locally with `xcrun simctl push`.
 enum PushRegistrar {
-    static func requestAndRegister() {
+    /// Ask for permission — only from a moment where the user can see why
+    /// (e.g. turning on "On this day" reminders). Returns whether it's granted.
+    @discardableResult
+    static func requestAndRegister() async -> Bool {
+        let granted = (try? await UNUserNotificationCenter.current()
+            .requestAuthorization(options: [.alert, .badge, .sound])) ?? false
+        if granted {
+            await MainActor.run { UIApplication.shared.registerForRemoteNotifications() }
+        }
+        return granted
+    }
+
+    /// Keep the stored device token fresh for users who already said yes,
+    /// without ever showing a prompt.
+    static func registerIfAuthorized() {
         Task {
-            let granted = (try? await UNUserNotificationCenter.current()
-                .requestAuthorization(options: [.alert, .badge, .sound])) ?? false
-            guard granted else { return }
+            let settings = await UNUserNotificationCenter.current().notificationSettings()
+            guard settings.authorizationStatus == .authorized
+                    || settings.authorizationStatus == .provisional else { return }
             await MainActor.run { UIApplication.shared.registerForRemoteNotifications() }
         }
     }

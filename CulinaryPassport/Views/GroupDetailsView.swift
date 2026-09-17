@@ -110,7 +110,7 @@ struct GroupDetailsView: View {
                     Text("Invite code")
                 } footer: {
                     if isOwner {
-                        Text("4–16 letters and numbers. Anyone with the code can join.")
+                        Text("6–32 letters and numbers. Anyone with the code can join.")
                     } else {
                         Text("Anyone with the code can join.")
                     }
@@ -158,7 +158,7 @@ struct GroupDetailsView: View {
 
     private var codeIsValid: Bool {
         let code = customCode.trimmingCharacters(in: .whitespaces)
-        return code.count >= 4 && code.count <= 16
+        return code.count >= 6 && code.count <= 32
             && code.allSatisfy { $0.isLetter || $0.isNumber }
     }
 
