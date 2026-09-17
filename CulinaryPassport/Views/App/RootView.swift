@@ -62,6 +62,13 @@ struct RootView: View {
                 }
             case .country: CountryMemoriesSheet(code: Self.debugCountry)
             case .planTrip: TripPlanEditorSheet(mode: .new(countryCode: Self.debugCountry))
+            case .share:
+                ShareCard {
+                    PassportShareCard(profile: app.me, stats: app.stats,
+                                      stamps: app.stamps.sorted {
+                                          ($0.lastVisited ?? "") > ($1.lastVisited ?? "")
+                                      })
+                }
             case .trip:
                 if let plan = app.tripPlans.first(where: { !$0.isOver }) {
                     TripPlanDetailSheet(plan: plan)
@@ -84,7 +91,7 @@ struct RootView: View {
     #if DEBUG
     /// Headless screenshot hook: `-open editor|import|checklist|wrapped|settings|memory|stamp|burst|trip|country|plan`.
     enum DebugScreen: String, Identifiable {
-        case editor, importPhotos = "import", checklist, wrapped, settings, memory, stamp, burst, trip, country, planTrip = "plan"
+        case editor, importPhotos = "import", checklist, wrapped, settings, memory, stamp, burst, trip, country, planTrip = "plan", share
         var id: String { rawValue }
     }
     @State private var debugScreen: DebugScreen?

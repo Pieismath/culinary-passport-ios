@@ -56,8 +56,9 @@ struct PassportView: View {
             ScrollView {
                 ScrollViewReader { scroll in
                     VStack(spacing: 16) {
-                        header
-                        worldCard
+                        PassportCover(name: app.me?.name ?? "", countries: app.stats.countries)
+                        dataPage
+                        identityActions
                         goalCard
                         bucketCard
                         Picker("View", selection: $page) {
@@ -128,103 +129,86 @@ struct PassportView: View {
         }
     }
 
-    // ── Header ───────────────────────────────────────────────────────────────
+    // ── Data page ────────────────────────────────────────────────────────────
 
-    private var header: some View {
-        VStack(spacing: 12) {
-            ZStack(alignment: .bottomTrailing) {
-                AvatarView(profile: app.me, size: 96)
-                    .overlay {
-                        if uploadingAvatar {
-                            ZStack {
-                                Circle().fill(.black.opacity(0.35))
-                                ProgressView().tint(.white)
+    private var dataPage: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            PassportDataPage(profile: app.me, stats: app.stats, memories: app.memories.count) {
+                ZStack(alignment: .bottomTrailing) {
+                    PassportPhoto(profile: app.me)
+                        .overlay {
+                            if uploadingAvatar {
+                                ZStack {
+                                    Rectangle().fill(.black.opacity(0.35))
+                                    ProgressView().tint(.white)
+                                }
                             }
                         }
+                    PhotosPicker(selection: $pickedItem, matching: .images) {
+                        Image(systemName: "camera.fill")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color.onBrand)
+                            .frame(width: 26, height: 26)
+                            .background(Circle().fill(Color.brand))
+                            .overlay(Circle().stroke(Color.card, lineWidth: 2))
                     }
-                PhotosPicker(selection: $pickedItem, matching: .images) {
-                    Image(systemName: "camera.fill")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.onBrand)
-                        .frame(width: 32, height: 32)
-                        .background(Circle().fill(Color.brand))
-                        .overlay(Circle().stroke(Color.card, lineWidth: 3))
-                }
-                .disabled(uploadingAvatar)
-                .accessibilityLabel("Change profile photo")
-            }
-
-            VStack(spacing: 4) {
-                Text(app.me?.name ?? " ")
-                    .font(.displaySmall)
-                    .foregroundStyle(Color.ink)
-                HStack(spacing: 6) {
-                    if let handle = app.me?.handle { Text(handle) }
-                    if let code = app.me?.homeCountry, let home = CountryStore.byCode[code] {
-                        Text("· \(home.flag) \(app.me?.homeCity.flatMap { $0.isEmpty ? nil : $0 } ?? home.name)")
-                    }
-                }
-                .font(.subheadline)
-                .foregroundStyle(Color.inkSecondary)
-                if let bio = app.me?.bio, !bio.isEmpty {
-                    Text(bio)
-                        .font(.subheadline)
-                        .foregroundStyle(Color.ink)
-                        .multilineTextAlignment(.center)
-                }
-            }
-
-            HStack(spacing: 10) {
-                Button("Edit profile") { showEdit = true }
-                    .buttonStyle(SecondaryButtonStyle())
-                if let shareImage {
-                    ShareLink(item: Image(uiImage: shareImage),
-                              preview: SharePreview("My Stampd passport", image: Image(uiImage: shareImage))) {
-                        Text("Share passport")
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(uploadingAvatar)
+                    .accessibilityLabel("Change profile photo")
+                    .padding(3)
                 }
             }
         }
-        .frame(maxWidth: .infinity)
-        .card()
+    }
+
+    private var identityActions: some View {
+        HStack(spacing: 10) {
+            Button("Edit profile") { showEdit = true }
+                .buttonStyle(SecondaryButtonStyle())
+            if let shareImage {
+                ShareLink(item: Image(uiImage: shareImage),
+                          preview: SharePreview("My Stampd passport", image: Image(uiImage: shareImage))) {
+                    Text("Share passport")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+            }
+        }
     }
 
     // ── World progress ───────────────────────────────────────────────────────
 
-    private var worldCard: some View {
+    /// The last page of the book: how much of the world, continent by continent.
+    private var progressPage: some View {
         let stats = app.stats
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("\(stats.countries)")
-                        .font(.system(size: 52, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.ink)
-                        .contentTransition(.numericText())
-                    Text("countries of \(CountryStore.sovereignCount)\(stats.territories > 0 ? " · +\(stats.territories) territor\(stats.territories == 1 ? "y" : "ies")" : "")")
-                        .font(.subheadline)
-                        .foregroundStyle(Color.inkSecondary)
+        return StampPage(number: stampPageCount + 1) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("ENDORSEMENTS")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .tracking(1.6)
+                    .foregroundStyle(Color.inkTertiary)
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("\(stats.countries)")
+                            .font(.system(size: 46, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.ink)
+                            .contentTransition(.numericText())
+                        Text("countries of \(CountryStore.sovereignCount)\(stats.territories > 0 ? " · +\(stats.territories) territor\(stats.territories == 1 ? "y" : "ies")" : "")")
+                            .font(.subheadline)
+                            .foregroundStyle(Color.inkSecondary)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text(stats.worldPercentText)
+                            .font(.number(.title))
+                            .foregroundStyle(Color.brand)
+                        Text("of the world")
+                            .font(.caption)
+                            .foregroundStyle(Color.inkSecondary)
+                    }
                 }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 0) {
-                    Text(stats.worldPercentText)
-                        .font(.number(.title))
-                        .foregroundStyle(Color.brand)
-                    Text("of the world")
-                        .font(.caption)
-                        .foregroundStyle(Color.inkSecondary)
-                }
+                ProgressLine(fraction: stats.worldFraction)
+                continentBars(stats)
             }
-            ProgressLine(fraction: stats.worldFraction)
-            HStack(spacing: 0) {
-                StatTile(value: "\(stats.continents)/7", label: "Continents")
-                StatTile(value: "\(stats.cities)", label: "Cities")
-                StatTile(value: "\(stats.memories)", label: "Memories")
-                StatTile(value: "\(stats.photos)", label: "Photos")
-            }
-            continentBars(stats)
         }
-        .card()
         .animation(.snappy, value: stats.countries)
     }
 
@@ -344,41 +328,43 @@ struct PassportView: View {
                            secondaryTitle: "Pick countries", secondaryAction: { showChecklist = true })
                 .padding(.vertical, 24)
         } else {
-            let sorted = app.stamps.sorted {
-                ($0.lastVisited ?? $0.firstVisited ?? "", $0.createdAt) > ($1.lastVisited ?? $1.firstVisited ?? "", $1.createdAt)
-            }
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3), spacing: 14) {
-                ForEach(sorted) { stamp in
-                    Button { country = stamp.countryCode } label: {
-                        VStack(spacing: 4) {
-                            StampBadge(code: stamp.countryCode, subtitle: stamp.yearsText, size: 100)
-                            let count = app.memoriesByCountry[stamp.countryCode]?.count ?? 0
-                            Text(count > 0 ? "\(count) memor\(count == 1 ? "y" : "ies")" : " ")
-                                .font(.caption2)
-                                .foregroundStyle(Color.inkTertiary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.vertical, 12)
-            .padding(.horizontal, 6)
-            .background {
-                // Passport page: faint guilloché lines.
-                RoundedRectangle(cornerRadius: Metrics.cornerLarge, style: .continuous)
-                    .fill(Color.card)
-                    .overlay {
-                        VStack(spacing: 22) {
-                            ForEach(0..<40, id: \.self) { _ in
-                                Rectangle().fill(Color.hairline.opacity(0.35)).frame(height: 0.5)
+            // Nine to a page, newest first — the book fills up as you travel.
+            LazyVStack(spacing: 14) {
+                ForEach(Array(stampPages.enumerated()), id: \.offset) { index, page in
+                    StampPage(number: index + 1) {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3),
+                                  spacing: 14) {
+                            ForEach(page) { stamp in
+                                Button { country = stamp.countryCode } label: {
+                                    VStack(spacing: 4) {
+                                        StampBadge(code: stamp.countryCode, subtitle: stamp.yearsText, size: 96)
+                                        let count = app.memoriesByCountry[stamp.countryCode]?.count ?? 0
+                                        Text(count > 0 ? count.counted("memory", "memories") : " ")
+                                            .font(.caption2)
+                                            .foregroundStyle(Color.inkTertiary)
+                                    }
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
-                        .clipped()
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerLarge, style: .continuous))
+                }
+                progressPage
             }
         }
     }
+
+    /// Stamps in the order they were collected, cut into pages.
+    private var stampPages: [[Stamp]] {
+        let sorted = app.stamps.sorted {
+            ($0.lastVisited ?? $0.firstVisited ?? "", $0.createdAt) > ($1.lastVisited ?? $1.firstVisited ?? "", $1.createdAt)
+        }
+        return stride(from: 0, to: sorted.count, by: 9).map {
+            Array(sorted[$0..<min($0 + 9, sorted.count)])
+        }
+    }
+
+    private var stampPageCount: Int { stampPages.count }
 
     @ViewBuilder private var tripsList: some View {
         let chapters = app.tripChapters
@@ -487,23 +473,12 @@ struct PassportView: View {
     @MainActor
     private func renderShareCard() {
         let stats = app.stats
-        let codes = app.stamps.sorted { ($0.lastVisited ?? "") > ($1.lastVisited ?? "") }.prefix(9).map(\.countryCode)
-        let card = ShareCard {
-            VStack(spacing: 16) {
-                VStack(spacing: 2) {
-                    Text("\(stats.countries)")
-                        .font(.system(size: 72, weight: .bold, design: .rounded))
-                    Text("countries · \(stats.worldPercentText) of the world")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Color(red: 0.42, green: 0.38, blue: 0.33))
-                }
-                .foregroundStyle(Color(red: 0.12, green: 0.1, blue: 0.08))
-                LazyVGrid(columns: Array(repeating: GridItem(.fixed(96)), count: 3), spacing: 6) {
-                    ForEach(codes, id: \.self) { StampBadge(code: $0, size: 92) }
-                }
-            }
+        let recent = app.stamps.sorted {
+            ($0.lastVisited ?? $0.firstVisited ?? "") > ($1.lastVisited ?? $1.firstVisited ?? "")
         }
-        let renderer = ImageRenderer(content: card)
+        let renderer = ImageRenderer(content: ShareCard {
+            PassportShareCard(profile: app.me, stats: stats, stamps: recent)
+        })
         renderer.scale = 3
         shareImage = stats.countries > 0 ? renderer.uiImage : nil
     }

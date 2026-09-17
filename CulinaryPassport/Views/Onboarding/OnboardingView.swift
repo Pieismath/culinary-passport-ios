@@ -20,9 +20,10 @@ struct OnboardingView: View {
     @State private var joinCode = ""
     @State private var joining = false
     @State private var loaded = false
-    /// Stamps before a scan/checklist opened — the home country is stamped on
-    /// Continue, so "any stamps" can't mean "they built their passport".
+    /// Stamps and trips before a scan/checklist opened — the home country is
+    /// stamped on Continue, so "any stamps" can't mean "they built a passport".
     @State private var stampBaseline = 0
+    @State private var tripBaseline = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -54,7 +55,9 @@ struct OnboardingView: View {
             NavigationStack {
                 PhotoImportView(onDone: {
                     showImport = false
-                    if app.stamps.count > stampBaseline { step = .friends }
+                    if app.stamps.count > stampBaseline || app.tripPlans.count > tripBaseline {
+                        step = .friends
+                    }
                 })
             }
         }
@@ -161,7 +164,7 @@ struct OnboardingView: View {
                         .font(.displayLarge)
                         .foregroundStyle(Color.ink)
                         .multilineTextAlignment(.center)
-                    Text("Start your passport with every country you've already visited.")
+                    Text("Your camera roll already knows. It has the trips, the cities and the dates — the passport can just read them.")
                         .font(.body)
                         .foregroundStyle(Color.inkSecondary)
                         .multilineTextAlignment(.center)
@@ -169,10 +172,11 @@ struct OnboardingView: View {
                 .padding(.top, 36)
 
                 optionCard(icon: "sparkle.magnifyingglass",
-                           title: "Scan my photos",
-                           detail: "Finds the countries in your camera roll in seconds. On your phone — nothing is uploaded.",
+                           title: "Read my photos",
+                           detail: "Finds your trips — countries, cities and dates — in seconds. It happens on your phone, and nothing is uploaded.",
                            badge: "Fastest") {
                     stampBaseline = app.stamps.count
+                    tripBaseline = app.tripPlans.count
                     showImport = true
                 }
                 optionCard(icon: "checklist",
@@ -180,11 +184,14 @@ struct OnboardingView: View {
                            detail: "Tap the places you've been, continent by continent.",
                            badge: nil) {
                     stampBaseline = app.stamps.count
+                    tripBaseline = app.tripPlans.count
                     showChecklist = true
                 }
 
                 if !app.stamps.isEmpty {
-                    Text("\(app.stats.countries) countr\(app.stats.countries == 1 ? "y" : "ies") stamped so far")
+                    Text(app.tripPlans.isEmpty
+                         ? "\(app.stats.countries.counted("country", "countries")) stamped so far"
+                         : "\(app.stats.countries.counted("country", "countries")) · \(app.tripPlans.count.counted("trip")) so far")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.brand)
                     Button("Continue") { step = .friends }

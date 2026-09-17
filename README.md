@@ -46,7 +46,7 @@ hygiene, and the app model against the demo backend).
 | **Globe** | Your countries in your color (deeper with every memory), bucket list in amber, small countries as dots. Tap a country for your memories there and which friends have been; *Where next?* spins to somewhere new. |
 | **Friends** | Memories from people you follow and your groups, a *New stamps* strip, Discover (public), activity, find people. |
 | **Groups** | A shared globe per group (everyone / all of us / me), leaderboard, and a chat for planning — share memories, react, reply, 🎲 *where should we go?* |
-| **Passport** | Stats and continent progress, yearly goal, bucket list, the stamp book, trips — the ones you're planning and the ones you've been on — a map, Year in Travel, settings. |
+| **Passport** | The booklet: cover, data page (who you are, how much of the world), then stamp pages nine to a page. Yearly goal, bucket list, trips — planned and been — a map, Year in Travel, settings. |
 
 Ways into a passport: **scan the photo library**, tick countries on a
 checklist, or add a memory (photos → place and date suggested from the photos'
@@ -108,9 +108,11 @@ Rules worth keeping:
 - **Images go through `ImagePipeline`** (disk-cached by storage path,
   downsampled to display size). Don't use `AsyncImage` for storage photos.
 - **Privacy is the server's job** (RLS). Client queries filter for relevance only.
-- **Paper, not panels.** A trip is a ticket (`TicketShape`), a saved place is a
-  luggage tag, a memory's words sit on a postcard. Reach for those before
-  adding another rounded rectangle.
+- **Paper, not panels.** The Passport tab is a booklet — gold-blocked cover,
+  a data page with a machine-readable strip, stamp pages with a stitched
+  spine and page numbers (`PassportBook.swift`). A trip is a ticket
+  (`TicketShape`), a saved place is a luggage tag, a memory's words sit on a
+  postcard. Reach for those before adding another rounded rectangle.
 - Upload JPEGs via `ImageTools` — renderers use `.pixels` format (1pt = 1px)
   and re-encoding strips EXIF GPS from shared photos.
 

@@ -338,6 +338,33 @@ final class TravelModelTests: XCTestCase {
 
     // ── Input hygiene ────────────────────────────────────────────────────────
 
+    func testMachineReadableStripReadsLikeAPassport() throws {
+        let id = try XCTUnwrap(UUID(uuidString: "0D3E0000-0000-4000-8000-000000000001"))
+        let profile = Profile(id: id, name: "Alex Rivera", color: "#2fbf8a", homeCity: "San Francisco",
+                              homeCountry: "US", username: "alex.rivera", bio: nil, avatarUrl: nil,
+                              isPublic: true, createdAt: Date(), yearlyGoal: nil)
+        var stats = TravelStats()
+        stats.countries = 20
+        stats.continents = 6
+        let lines = MachineReadableStrip.lines(profile: profile, stats: stats)
+
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertTrue(lines.allSatisfy { $0.count == 40 }, "both lines are filled to the same width")
+        XCTAssertTrue(lines[0].hasPrefix("P<USRIVERA<<ALEX"), lines[0])
+        XCTAssertTrue(lines[1].contains("US020"), lines[1])
+        // The number is derived from the account, so it never changes.
+        XCTAssertEqual(MachineReadableStrip.lines(profile: profile, stats: stats), lines)
+
+        // One-word names and no home country still produce a valid strip.
+        let sparse = Profile(id: id, name: "Prince", color: "#2fbf8a", homeCity: nil, homeCountry: nil,
+                             username: nil, bio: nil, avatarUrl: nil, isPublic: false,
+                             createdAt: Date(), yearlyGoal: nil)
+        let bare = MachineReadableStrip.lines(profile: sparse, stats: TravelStats())
+        XCTAssertTrue(bare[0].hasPrefix("P<XXPRINCE<<"), bare[0])
+        XCTAssertTrue(bare.allSatisfy { $0.count == 40 })
+        XCTAssertTrue(MachineReadableStrip.lines(profile: nil, stats: TravelStats())[0].hasPrefix("P<XXTRAVELLER"))
+    }
+
     func testUsernames() {
         XCTAssertEqual(Handles.normalizedUsername("  @Jason.F "), "jason.f")
         XCTAssertTrue(Handles.isValidUsername("alex.rivera"))

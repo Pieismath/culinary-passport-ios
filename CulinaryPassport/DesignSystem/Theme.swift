@@ -63,6 +63,9 @@ enum Palette {
     static let bucket = UIColor.dynamic(light: 0xC0832A, dark: 0xE4AE55)
     static let bucketSoft = UIColor.dynamic(light: 0xF4E4C6, dark: 0x3A2E19)
     static let danger = UIColor.dynamic(light: 0xB3261E, dark: 0xF2877E)
+    /// Gold leaf on the passport cover. The cover is dark in both modes, so
+    /// this one colour is right in both.
+    static let foil = UIColor(rgb: 0xD9B877)
 }
 
 extension Color {
@@ -81,6 +84,7 @@ extension Color {
     static let bucket = Color(uiColor: Palette.bucket)
     static let bucketSoft = Color(uiColor: Palette.bucketSoft)
     static let danger = Color(uiColor: Palette.danger)
+    static let foil = Color(uiColor: Palette.foil)
 
     init(hex: String, fallback: UIColor = .systemGray) {
         self.init(uiColor: UIColor(hex: hex) ?? fallback)
