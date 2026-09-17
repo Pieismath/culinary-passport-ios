@@ -1,17 +1,15 @@
-# Culinary Passport — iOS
+# Stampd — iOS
 
-Native SwiftUI client for Culinary Passport. The web app (`../culinary-passport`)
-is the prototype and stays live as the marketing/landing page; this is the real
-product: globe, camera flows, haptics, share sheets.
+**Your travel passport.** Stamp every country you visit, keep the photos on
+your globe, and see where your friends have been.
 
-**Backend is shared** — same Supabase project as the web app. Schema lives in
-the web repo as ordered migrations (`supabase/migrations/`, see its
-`supabase/README.md`); edge functions deploy from there too.
+Native SwiftUI, iOS 17+. Backend is the shared Supabase project whose schema
+lives in the web repo (`../culinary-passport/supabase/migrations`). The repo,
+target and bundle id still say *CulinaryPassport* — the app pivoted from a
+cuisine globe to travel on 2026-09-17 (see [`docs/TRAVEL-PIVOT.md`](docs/TRAVEL-PIVOT.md)),
+and those identifiers are wired into Supabase auth redirects.
 
-## Project setup
-
-The Xcode project is generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen)
-so `.xcodeproj` noise stays out of git:
+## Run it
 
 ```bash
 brew install xcodegen
@@ -19,49 +17,85 @@ xcodegen generate
 open CulinaryPassport.xcodeproj
 ```
 
-Dependencies (declared in `project.yml`, resolved by SPM):
-- [supabase-swift](https://github.com/supabase/supabase-swift) — auth, Postgrest, storage, realtime
+Copy `Config.example.xcconfig` to `Config.xcconfig` (gitignored) and fill in the
+Supabase URL + anon key.
 
-Configuration: copy `Config.example.xcconfig` to `Config.xcconfig` (gitignored) and
-fill in your Supabase URL + anon key.
+**No account needed to explore:** launch with `-uiPreview` (or tap *Explore with
+demo data* on the sign-in screen in Debug builds). Every screen runs on
+`DemoBackend` — a believable cast with passports, memories, groups and chat,
+and generated postcard photos. Nothing touches the network.
 
-## Where things stand
+Debug launch arguments (Debug builds only):
 
-MVP → v1.3 is built (see `docs/ROADMAP.md` for per-item status):
-- **Globe**: real Natural Earth polygons triangulated onto the SceneKit sphere,
-  mesh-cached; personal globe + three-lens group globe
-- **Journal**: entries CRUD with photos (private bucket, signed-URL rendering
-  via `PhotoSigning.swift`), per-entry visibility (public / groups / private)
-  enforced by RLS
-- **Social**: Apple + Google + email sign-in, public profiles, follows,
-  discover feed, timeline, photo map
-- **Groups**: create / invite-code join, live feed (realtime subscription +
-  pull-to-refresh) with reactions and comments, synced meals, group globe
-- **Retention**: dinner picker, avatar accessories, Yearly Wrapped
-- **Avatar**: a photo you pick, uploaded to the `avatars` bucket (own-folder
-  RLS), with unlockable accessories composited over it. The AI selfie→portrait
-  pipeline was dropped — see `docs/ROADMAP.md` item 4
+| argument | effect |
+| --- | --- |
+| `-uiPreview` | demo backend, signed in as Alex |
+| `-tab globe\|friends\|groups\|passport` | open on a tab |
+| `-open editor\|import\|checklist\|wrapped\|settings\|memory\|stamp\|burst` | present a screen |
+| `-onboarding` | force the first-run flow |
+| `-fly JP` | fly the globe to a country |
 
-Still open: **push notifications** (ROADMAP item 14) — token registration works,
-but APNs delivery, notification handling, and the push entitlement are gated on
-a paid Apple Developer account (which real Apple Sign-In needs too).
+Tests: `xcodebuild test -scheme CulinaryPassport -destination 'platform=iOS Simulator,name=iPhone 17 Pro'`
+(geometry, travel stats, trips, photo-location lookup, reminders, input
+hygiene, and the app model against the demo backend).
 
-Restaurant autocomplete goes through the `places-proxy` edge function (web
-repo), which requires a signed-in user's JWT — never embed a Places key in the
-binary.
+## The product
 
-## Repo layout
+| Tab | What it's for |
+| --- | --- |
+| **Globe** | Your countries in your color (deeper with every memory), bucket list in amber, small countries as dots. Tap a country for your memories there and which friends have been; *Where next?* spins to somewhere new. |
+| **Friends** | Memories from people you follow and your groups, a *New stamps* strip, Discover (public), activity, find people. |
+| **Groups** | A shared globe per group (everyone / all of us / me), leaderboard, and a chat for planning — share memories, react, reply, 🎲 *where should we go?* |
+| **Passport** | Stats and continent progress, yearly goal, bucket list, the stamp book, trips (inferred from memory dates), a map, Year in Travel, settings. |
+
+Ways into a passport: **scan the photo library** (locations are read
+on-device; nothing is uploaded — only the countries you pick), tick countries
+on a checklist, or add a memory (photos → place and date suggested from the
+photos' metadata → save; a new country plays the stamp moment).
+
+## Architecture
 
 ```
-project.yml                    XcodeGen manifest (targets, SPM deps)
 CulinaryPassport/
-  CulinaryPassportApp.swift    app entry, auth-gated root
-  Config.swift                 reads Supabase creds from the build config
-  Models/Models.swift          Entry, Profile, Group, GroupPost, Follow — mirror the SQL schema
-  Services/SupabaseService.swift   shared client + data access
-  Services/AvatarService.swift     selfie → generate-avatar edge function
-  Services/PhotoSigning.swift      signed-URL cache + SignedPhotoImage view
-  Views/RootView.swift         tab shell (Globe / Journal / Groups / Profile)
-  Globe/                       polygon tessellation + SceneKit globe
-docs/ROADMAP.md                ordered build plan with status
+  CulinaryPassportApp.swift   entry: splash, session switch, deep links, password reset
+  DesignSystem/               Theme (light/dark tokens, type), Components, RemoteImage
+                              (cached image pipeline), StampBadge, ImageTools
+  Models/                     Models (Profile, Memory, Stamp, Group…), Countries
+                              (197 countries + territories), TravelStats (stats, trips, year review)
+  Services/
+    Backend.swift             protocol for everything the app asks of a server
+    SupabaseBackend.swift     live implementation (RLS decides visibility)
+    DemoBackend.swift, DemoData.swift   in-memory fixtures + postcard renderer
+    AppModel.swift            @Observable single source of truth for the signed-in
+                              user; optimistic mutations, per-account disk snapshot
+    PhotoLibraryScanner.swift photo-library → countries (on-device), PlaceLocator
+    PlaceSearch.swift         Apple Maps place search + "On this day" reminders
+  Globe/                      SceneKit globe: tessellated Natural Earth polygons,
+                              ribbon borders, small-country dots, themed, fit-to-view camera
+  Views/                      App · Auth · Onboarding · Globe · Memories · Social · Groups · Passport · Shared
 ```
+
+Rules worth keeping:
+
+- **Every color is a token with a dark variant** (`Theme.swift`). Don't draw
+  `.primary` text on a hard-coded paper color — that's what broke Dark Mode before.
+- **Screens read `AppModel`, not their own copies** of the user's data, so a
+  change on one tab shows everywhere immediately.
+- **Images go through `ImagePipeline`** (disk-cached by storage path,
+  downsampled to display size). Don't use `AsyncImage` for storage photos.
+- **Privacy is the server's job** (RLS). Client queries filter for relevance only.
+- Upload JPEGs via `ImageTools` — renderers use `.pixels` format (1pt = 1px)
+  and re-encoding strips EXIF GPS from shared photos.
+
+## Backend
+
+Travel model (migration `20260917120000_travel_passport.sql`): `entries` rows
+with `kind = 'memory'` are memories (pre-pivot meals are `kind = 'meal'` and
+never read), `stamps` are the countries you've been to, and *Friends*
+visibility (`visibility = 'groups'`) reaches mutual follows and group mates via
+`is_friend()`. RPCs: `friends_feed`, `my_activity`, `add_stamps`,
+`join_group_by_invite` (rate-limited). Edge function: `delete-account`.
+
+Push delivery still needs the paid Apple Developer account (entitlement +
+APNs key); device-token registration is in place and **local** "On this day"
+reminders work without it.
