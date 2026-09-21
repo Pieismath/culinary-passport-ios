@@ -39,7 +39,8 @@ targets:
         # must be supported" warning without pretending to support landscape.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true
-        NSCameraUsageDescription: "Take photos for your travel memories and profile."
+        NSCameraUsageDescription: "Take photos of your meals and travels, and for your profile."
+        NSLocationWhenInUseUsageDescription: "Stampd uses your location to find restaurants near you, when you log a meal or roll for dinner. It isn't stored or shared."
         # Read access powers "Find countries in my photos" — locations are read
         # on-device and nothing is uploaded unless the user posts a memory.
         NSPhotoLibraryUsageDescription: "Stampd reads where your photos were taken to find the countries you've visited, and lets you add photos to memories. This happens on your phone; nothing is uploaded unless you post it."

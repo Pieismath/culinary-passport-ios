@@ -59,7 +59,7 @@ struct MemoryDetailView: View {
                             .font(.display)
                             .foregroundStyle(Color.ink)
                         HStack(spacing: 6) {
-                            Text("\(current.country?.flag ?? "") \(current.placeLine)")
+                            Text(current.feedLine)
                             Text("·").foregroundStyle(Color.inkTertiary)
                             Text(DayFormat.pretty(current.date))
                         }
@@ -96,7 +96,7 @@ struct MemoryDetailView: View {
                     }
 
                     if let notes = current.notes, !notes.isEmpty {
-                        PostcardNote(text: notes, code: current.countryCode,
+                        PostcardNote(text: notes, code: current.countryCode, tasted: current.isMeal,
                                      stampSubtitle: String(current.date.prefix(4)))
                     }
 
@@ -121,7 +121,11 @@ struct MemoryDetailView: View {
                 ToolbarItem(placement: .primaryAction) { menu }
             }
             .sheet(isPresented: $editing) {
-                MemoryEditorView(mode: .edit(current))
+                if current.isMeal {
+                    MealEditorView(mode: .edit(current))
+                } else {
+                    MemoryEditorView(mode: .edit(current))
+                }
             }
             .sheet(isPresented: $reporting) {
                 ReportSheet(title: "Report memory") { reason in

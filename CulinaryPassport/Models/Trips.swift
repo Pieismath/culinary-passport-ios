@@ -165,9 +165,14 @@ struct SavedPlace: Codable, Identifiable, Hashable {
     var sourceEntryId: UUID?
     var done: Bool
     let createdAt: Date
+    /// What a restaurant serves (GE for a Georgian place in San Francisco);
+    /// countryCode is where it is.
+    var cuisineCode: String?
 
     init(id: UUID, userId: UUID, tripId: UUID?, countryCode: String, title: String, city: String,
-         lat: Double?, lng: Double?, note: String, sourceEntryId: UUID?, done: Bool, createdAt: Date) {
+         lat: Double?, lng: Double?, note: String, sourceEntryId: UUID?, done: Bool, createdAt: Date,
+         cuisineCode: String? = nil) {
+        self.cuisineCode = cuisineCode
         self.id = id
         self.userId = userId
         self.tripId = tripId
@@ -196,9 +201,11 @@ struct SavedPlace: Codable, Identifiable, Hashable {
         sourceEntryId = try c.decodeIfPresent(UUID.self, forKey: .sourceEntryId)
         done = try c.decodeIfPresent(Bool.self, forKey: .done) ?? false
         createdAt = try c.decode(Date.self, forKey: .createdAt)
+        cuisineCode = try c.decodeIfPresent(String.self, forKey: .cuisineCode)
     }
 
     var country: Country? { CountryStore.byCode[countryCode] }
+    var isRestaurant: Bool { cuisineCode != nil }
     var displayTitle: String { title.isEmpty ? (city.isEmpty ? country?.name ?? countryCode : city) : title }
 
     /// "Kyoto, Japan" — omits whatever the title already says.
@@ -217,6 +224,7 @@ struct NewSavedPlace: Encodable {
     let userId: UUID
     var tripId: UUID?
     var countryCode: String
+    var cuisineCode: String?
     var title: String
     var city: String
     var lat: Double?

@@ -174,6 +174,7 @@ struct TripPlanCard: View {
 struct PostcardNote: View {
     let text: String
     let code: String
+    var tasted = false
     var stampSubtitle: String?
 
     var body: some View {
@@ -190,7 +191,7 @@ struct PostcardNote: View {
                 .padding(.vertical, 2)
 
             VStack(spacing: 7) {
-                StampBadge(code: code, subtitle: stampSubtitle, size: 62)
+                StampBadge(code: code, subtitle: stampSubtitle, size: 62, tasted: tasted)
                 VStack(spacing: 4) {
                     ForEach(0..<3, id: \.self) { _ in
                         Capsule().fill(Color.hairline).frame(height: 1.5)

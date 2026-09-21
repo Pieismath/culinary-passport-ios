@@ -106,7 +106,7 @@ struct MemoryCard: View {
                             Text(author?.name ?? "Traveller")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(Color.ink)
-                            Text("\(memory.country?.flag ?? "") \(memory.placeLine) · \(RelativeTime.short(memory.createdAt))")
+                            Text("\(memory.feedLine) · \(RelativeTime.short(memory.createdAt))")
                                 .font(.caption)
                                 .foregroundStyle(Color.inkSecondary)
                                 .lineLimit(1)

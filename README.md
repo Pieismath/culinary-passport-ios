@@ -1,13 +1,15 @@
 # Stampd — iOS
 
-**Your travel passport.** Stamp every country you visit, keep the photos on
-your globe, and see where your friends have been.
+**Eat your way around the world — and stamp the places you actually go.**
+Every country has two stamps: Tasted (you ate its food) and Visited (you
+went). Food is the weekly habit; travel is the big moment; one passport.
 
 Native SwiftUI, iOS 17+. Backend is the shared Supabase project whose schema
 lives in the web repo (`../culinary-passport/supabase/migrations`). The repo,
-target and bundle id still say *CulinaryPassport* — the app pivoted from a
-cuisine globe to travel on 2026-09-17 (see [`docs/TRAVEL-PIVOT.md`](docs/TRAVEL-PIVOT.md)),
-and those identifiers are wired into Supabase auth redirects.
+target and bundle id still say *CulinaryPassport*: the app pivoted to travel on
+2026-09-17 ([`docs/TRAVEL-PIVOT.md`](docs/TRAVEL-PIVOT.md)) and brought food back
+as the everyday half on 2026-09-21 — travel alone is a few trips a year, too
+rare to become a habit. Those identifiers are wired into Supabase auth redirects.
 
 ## Run it
 
@@ -31,7 +33,8 @@ Debug launch arguments (Debug builds only):
 | --- | --- |
 | `-uiPreview` | demo backend, signed in as Alex |
 | `-tab globe\|friends\|groups\|passport` | open on a tab |
-| `-open editor\|import\|checklist\|wrapped\|settings\|memory\|stamp\|burst` | present a screen |
+| `-open editor\|meal\|dinner\|cuisines\|cuisine\|import\|checklist\|wrapped\|settings\|memory\|trip\|plan\|country\|share\|stamp\|burst` | present a screen (`-code GE` picks the country/cuisine) |
+| `-page visited\|tasted\|trips\|map` | open the Passport on a section |
 | `-onboarding` | force the first-run flow |
 | `-fly JP` | fly the globe to a country |
 
@@ -43,10 +46,23 @@ hygiene, and the app model against the demo backend).
 
 | Tab | What it's for |
 | --- | --- |
-| **Globe** | Your countries in your color (deeper with every memory), bucket list in amber, small countries as dots. Tap a country for your memories there and which friends have been; *Where next?* spins to somewhere new. |
-| **Friends** | Memories from people you follow and your groups, a *New stamps* strip, Discover (public), activity, find people. |
-| **Groups** | A shared globe per group (everyone / all of us / me), leaderboard, and a chat for planning — share memories, react, reply, 🎲 *where should we go?* |
-| **Passport** | The booklet: cover, data page (who you are, how much of the world), then stamp pages nine to a page. Yearly goal, bucket list, trips — planned and been — a map, Year in Travel, settings. |
+| **Globe** | Countries you've visited in your colour, cuisines you've tasted in a lighter wash of it, bucket list in amber. **+** logs a meal (hold for a travel memory). The dice rolls dinner: a cuisine you haven't tried and who serves it near you (hold for travel ideas). Tap a country for its meals, memories and who's been. |
+| **Friends** | Meals and memories from people you follow and your groups, a *New stamps* strip, Discover (public), activity, find people. Save any friend's meal as a restaurant to try. |
+| **Groups** | A shared globe per group, leaderboard, and a chat — share memories, 🎲 *what should we eat?* (a cuisine none of you has tried) or *where should we go?* |
+| **Passport** | The booklet: cover, data page, then Visited and Tasted stamp pages. Trips — planned and been — a map, Year in Travel, settings. Each cuisine has a page: your meals, restaurants you've saved, where friends ate it, who serves it nearby. |
+
+### Food: the weekly half
+
+A meal is an `entries` row with kind `meal` — the culinary app's own shape,
+so meals people logged before the travel pivot came back as Tasted stamps.
+Logging one is photo → restaurant → cuisine → what you had: a photo's
+location finds the restaurant (`MKLocalPointsOfInterestRequest`), the
+restaurant's name suggests the cuisine (`Cuisine.suggest`), and a first taste
+plays the stamp moment. `Cuisine` names ~210 cuisines the way people order
+them ("Georgian", "Persian"), maps dishes to them for search ("pho" →
+Vietnamese), and keeps the dice to cuisines a city of any size serves.
+Deliberately *not* here: ratings and rankings. That's Beli's game; this one is
+about what you haven't tried yet.
 
 Ways into a passport: **scan the photo library**, tick countries on a
 checklist, or add a memory (photos → place and date suggested from the photos'
@@ -81,7 +97,8 @@ CulinaryPassport/
   DesignSystem/               Theme (light/dark tokens, type), Components, RemoteImage
                               (cached image pipeline), StampBadge, Ticket (boarding
                               pass, luggage tag, postcard), ImageTools
-  Models/                     Models (Profile, Memory, Stamp, Group…), Trips (planned
+  Models/                     Models (Profile, Memory (memories and meals), Stamp, Taste,
+                              Group…), Cuisines (names, dishes, clues, dice), Trips (planned
                               trips + saved places), Countries (197 countries +
                               territories), PlaceLocator (photo location → place),
                               TravelStats (stats, chapters, year review)
@@ -93,10 +110,12 @@ CulinaryPassport/
                               user; optimistic mutations, per-account disk snapshot
     PhotoLibraryScanner.swift photo-library → countries (on-device)
     PhotoTripBuilder.swift    located photos → trips, stops and where home is
-    PlaceSearch.swift         Apple Maps place search + "On this day" reminders
+    PlaceSearch.swift         Apple Maps place search (food-only for meals, restaurants by
+                              cuisine for the dice) + "On this day" reminders
+    NearMe.swift              one-shot location, only when a food feature needs it
   Globe/                      SceneKit globe: tessellated Natural Earth polygons,
                               ribbon borders, small-country dots, themed, fit-to-view camera
-  Views/                      App · Auth · Onboarding · Globe · Memories · Trips · Social · Groups · Passport · Shared
+  Views/                      App · Auth · Onboarding · Globe · Meals · Memories · Trips · Social · Groups · Passport · Shared
 ```
 
 Rules worth keeping:

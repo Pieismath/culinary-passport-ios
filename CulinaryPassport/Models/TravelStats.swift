@@ -11,6 +11,9 @@ struct TravelStats: Equatable {
     var cities = 0
     var memories = 0
     var photos = 0
+    /// Cuisines tasted (the Tasted half of the passport).
+    var cuisines = 0
+    var meals = 0
     var continentProgress: [Continent: (visited: Int, total: Int)] = [:]
 
     var worldFraction: Double {
@@ -26,7 +29,15 @@ struct TravelStats: Equatable {
 
     init() {}
 
-    init(stamps: [Stamp], memories: [Memory]) {
+    /// "12% of the world's cuisines" — out of every cuisine you can taste.
+    var cuisineFraction: Double {
+        guard !Cuisine.codes.isEmpty else { return 0 }
+        return min(1, Double(cuisines) / Double(Cuisine.codes.count))
+    }
+
+    init(stamps: [Stamp], memories: [Memory], tastes: [Taste] = [], meals: Int = 0) {
+        cuisines = tastes.count
+        self.meals = meals
         let codes = Set(stamps.map(\.countryCode))
         let places = codes.compactMap { CountryStore.byCode[$0] }
         countries = places.filter(\.isSovereign).count
@@ -46,6 +57,7 @@ struct TravelStats: Equatable {
         lhs.countries == rhs.countries && lhs.territories == rhs.territories
             && lhs.continents == rhs.continents && lhs.cities == rhs.cities
             && lhs.memories == rhs.memories && lhs.photos == rhs.photos
+            && lhs.cuisines == rhs.cuisines && lhs.meals == rhs.meals
     }
 
     /// Distinct city+country pairs (so "Paris, FR" and "Paris, US" differ).

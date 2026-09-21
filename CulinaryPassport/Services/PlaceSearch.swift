@@ -32,15 +32,56 @@ final class PlaceSearch: NSObject, MKLocalSearchCompleterDelegate {
 
     private let completer = MKLocalSearchCompleter()
 
-    init(near coordinate: CLLocationCoordinate2D? = nil) {
+    /// `foodOnly` narrows to places that serve food, searched around the
+    /// neighbourhood rather than the country — for logging a meal.
+    init(near coordinate: CLLocationCoordinate2D? = nil, foodOnly: Bool = false) {
         super.init()
         completer.delegate = self
-        completer.resultTypes = [.pointOfInterest, .address]
+        if foodOnly {
+            completer.resultTypes = .pointOfInterest
+            completer.pointOfInterestFilter = PlaceSearch.foodFilter
+        } else {
+            completer.resultTypes = [.pointOfInterest, .address]
+        }
         if let coordinate {
+            let span = foodOnly ? 0.4 : 12
             completer.region = MKCoordinateRegion(center: coordinate,
-                                                  span: MKCoordinateSpan(latitudeDelta: 12, longitudeDelta: 12))
+                                                  span: MKCoordinateSpan(latitudeDelta: span, longitudeDelta: span))
         }
     }
+
+    static let foodFilter = MKPointOfInterestFilter(including: [
+        .restaurant, .cafe, .bakery, .brewery, .winery, .foodMarket, .nightlife,
+    ])
+
+    /// Restaurants serving a cuisine near a point — what the dinner dice
+    /// shows once it lands. Apple Maps understands "Georgian restaurant".
+    static func restaurants(serving code: String, near coordinate: CLLocationCoordinate2D,
+                            limit: Int = 8) async -> [MKMapItem] {
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = "\(Cuisine.name(for: code)) restaurant"
+        request.resultTypes = .pointOfInterest
+        request.pointOfInterestFilter = foodFilter
+        request.region = MKCoordinateRegion(center: coordinate,
+                                            span: MKCoordinateSpan(latitudeDelta: 0.35, longitudeDelta: 0.35))
+        // The region is only a hint by default — "Moroccan restaurant" near
+        // San Francisco came back from Delaware.
+        if #available(iOS 18.0, *) { request.regionPriority = .required }
+        guard let response = try? await MKLocalSearch(request: request).start() else { return [] }
+        let here = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        return Array(response.mapItems
+            .compactMap { item -> (MKMapItem, CLLocationDistance)? in
+                guard let there = item.placemark.location else { return nil }
+                let distance = there.distance(from: here)
+                return distance <= maxDinnerDistance ? (item, distance) : nil
+            }
+            .sorted { $0.1 < $1.1 }
+            .map(\.0)
+            .prefix(limit))
+    }
+
+    /// Dinner tonight means somewhere you can get to tonight.
+    static let maxDinnerDistance: CLLocationDistance = 40_000
 
     nonisolated func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
         let fresh = completer.results

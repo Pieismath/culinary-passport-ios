@@ -62,6 +62,10 @@ struct RootView: View {
                 }
             case .country: CountryMemoriesSheet(code: Self.debugCountry)
             case .planTrip: TripPlanEditorSheet(mode: .new(countryCode: Self.debugCountry))
+            case .dinner: DinnerDiceSheet()
+            case .cuisine: CuisineSheet(code: Self.debugCountry)
+            case .meal: MealEditorView(mode: .new(cuisine: nil, place: nil))
+            case .cuisines: NavigationStack { CuisineChecklistView(onDone: { debugScreen = nil }) }
             case .share:
                 ShareCard {
                     PassportShareCard(profile: app.me, stats: app.stats,
@@ -91,7 +95,7 @@ struct RootView: View {
     #if DEBUG
     /// Headless screenshot hook: `-open editor|import|checklist|wrapped|settings|memory|stamp|burst|trip|country|plan`.
     enum DebugScreen: String, Identifiable {
-        case editor, importPhotos = "import", checklist, wrapped, settings, memory, stamp, burst, trip, country, planTrip = "plan", share
+        case editor, importPhotos = "import", checklist, wrapped, settings, memory, stamp, burst, trip, country, planTrip = "plan", share, dinner, meal, cuisines, cuisine
         var id: String { rawValue }
     }
     @State private var debugScreen: DebugScreen?

@@ -37,7 +37,8 @@ final class AppModel {
 
     struct SaveResult {
         let memory: Memory
-        /// First time this country is stamped → the stamp moment plays.
+        /// First stamp of its kind for this country — first visit for a
+        /// memory, first taste for a meal — so the stamp moment plays.
         let isNewCountry: Bool
         /// "Country Nº 21" — its place among sovereign countries, matching the
         /// headline count. Nil for territories (they don't change that count).
@@ -52,6 +53,9 @@ final class AppModel {
     var me: Profile?
     var memories: [Memory] = [] { didSet { rebuildDerived() } }
     var stamps: [Stamp] = [] { didSet { rebuildDerived() } }
+    /// Meals (entries of kind 'meal') and the cuisines they've tasted.
+    var meals: [Memory] = [] { didSet { rebuildDerived() } }
+    var tastes: [Taste] = [] { didSet { rebuildDerived() } }
     var bucketList: Set<String> = []
     var following: Set<UUID> = []
     var followers: Set<UUID> = []
@@ -75,7 +79,12 @@ final class AppModel {
     private(set) var visitedCodes: Set<String> = []
     private(set) var stampsByCode: [String: Stamp] = [:]
     private(set) var memoriesByCountry: [String: [Memory]] = [:]
+    private(set) var tastedCodes: Set<String> = []
+    private(set) var tastesByCode: [String: Taste] = [:]
+    private(set) var mealsByCountry: [String: [Memory]] = [:]
     private(set) var placesByCountry: [String: [SavedPlace]] = [:]
+    /// Restaurants to try, by what they serve.
+    private(set) var restaurantsByCuisine: [String: [SavedPlace]] = [:]
     /// Trips that haven't ended yet, soonest first (undated ones last).
     private(set) var upcomingTrips: [TripPlan] = []
     private(set) var stats = TravelStats()
@@ -181,6 +190,8 @@ final class AppModel {
         me = nil
         memories = []
         stamps = []
+        meals = []
+        tastes = []
         tripPlans = []
         savedPlaces = []
         lastImport = nil
@@ -227,9 +238,11 @@ final class AppModel {
             async let groups = backend.myGroups()
             async let trips = backend.tripPlans()
             async let places = backend.savedPlaces()
+            async let myMeals = backend.meals(userId: myId)
+            async let myTastes = backend.tastes(userIds: [myId])
             let (p, m, s, b, fing, fers, bl, g) = try await (profile, memories, stamps, bucket,
                                                             following, followers, blocked, groups)
-            let (plans, saved) = try await (trips, places)
+            let (plans, saved, eaten, tasted) = try await (trips, places, myMeals, myTastes)
             guard self.myId == myId else { return }
             guard let p else {
                 // Profile row is gone (deleted account / stale session).
@@ -246,6 +259,8 @@ final class AppModel {
             self.groups = g
             tripPlans = plans
             savedPlaces = saved
+            self.meals = eaten
+            self.tastes = tasted
             // The traveller's own data is in: the app is usable from here even
             // if the group/people round trips below fail.
             loadState = .loaded
@@ -266,6 +281,12 @@ final class AppModel {
             guard self.myId == myId else { return }
             for profile in profiles { people[profile.id] = profile }
         }
+        saveSnapshot()
+    }
+
+    func refreshTastes() async {
+        guard let myId, let fresh = try? await backend.tastes(userIds: [myId]), self.myId == myId else { return }
+        tastes = fresh
         saveSnapshot()
     }
 
@@ -300,7 +321,8 @@ final class AppModel {
     func saveMemory(_ draft: MemoryDraft, editing original: Memory?, newId: UUID = UUID(),
                     newPhotos: [Data], shareTo groupIds: Set<UUID>) async throws -> SaveResult {
         guard let myId else { throw AppError("You're signed out.") }
-        let wasVisited = visitedCodes.contains(draft.countryCode)
+        let isMeal = draft.kind == .meal
+        let wasVisited = isMeal ? tastedCodes.contains(draft.countryCode) : visitedCodes.contains(draft.countryCode)
 
         var uploadedPaths: [String] = []
         do {
@@ -349,43 +371,109 @@ final class AppModel {
         // but it must not land in someone else's state.
         guard self.myId == myId else { throw CancellationError() }
 
-        memories.removeAll { $0.id == saved.id }
-        memories.append(saved)
-        memories.sort { ($0.date, $0.createdAt) > ($1.date, $1.createdAt) }
-        mergeLocalStamp(StampInput(countryCode: saved.countryCode, firstVisited: saved.date,
-                                   lastVisited: saved.date, source: .memory))
+        if isMeal {
+            meals.removeAll { $0.id == saved.id }
+            meals.append(saved)
+            meals.sort { ($0.date, $0.createdAt) > ($1.date, $1.createdAt) }
+            mergeLocalTaste(saved)
+        } else {
+            memories.removeAll { $0.id == saved.id }
+            memories.append(saved)
+            memories.sort { ($0.date, $0.createdAt) > ($1.date, $1.createdAt) }
+            mergeLocalStamp(StampInput(countryCode: saved.countryCode, firstVisited: saved.date,
+                                       lastVisited: saved.date, source: .memory))
+        }
 
         for groupId in groupIds {
             try? await backend.createPost(groupId: groupId, text: "", memoryId: saved.id)
         }
-        backend.logEvent(original == nil ? "memory_added" : "memory_edited",
+        backend.logEvent(original == nil ? (isMeal ? "meal_added" : "memory_added")
+                                         : (isMeal ? "meal_edited" : "memory_edited"),
                          props: ["country": saved.countryCode, "photos": String(photos.count)])
         saveSnapshot()
         Task {
-            await refreshStamps()
+            if isMeal { await refreshTastes() } else { await refreshStamps() }
             MemoryReminders.reschedule(memories: memories)
         }
 
         let isNew = original == nil && !wasVisited
-        let number = CountryStore.byCode[saved.countryCode]?.isSovereign == true ? max(1, stats.countries) : nil
+        // Nº among cuisines for a meal; among sovereign countries for a visit.
+        let number = isMeal ? max(1, stats.cuisines)
+            : (CountryStore.byCode[saved.countryCode]?.isSovereign == true ? max(1, stats.countries) : nil)
         if isNew { lastStampBurst = [saved.countryCode] }
         return SaveResult(memory: saved, isNewCountry: isNew, countryNumber: number)
     }
 
     func deleteMemory(_ memory: Memory) async throws {
         let owner = myId
-        let before = memories
-        memories.removeAll { $0.id == memory.id }
+        let before = (memories, meals)
+        if memory.isMeal { meals.removeAll { $0.id == memory.id } } else { memories.removeAll { $0.id == memory.id } }
         do {
             try await backend.deleteMemory(memory)
-            backend.logEvent("memory_deleted", props: nil)
+            backend.logEvent(memory.isMeal ? "meal_deleted" : "memory_deleted", props: nil)
             guard myId == owner else { return }
             saveSnapshot()
-            await refreshStamps()
+            if memory.isMeal { await refreshTastes() } else { await refreshStamps() }
             MemoryReminders.reschedule(memories: memories)
         } catch {
-            if myId == owner { memories = before }
+            if myId == owner { (memories, meals) = before }
             throw error
+        }
+    }
+
+    // ── Tastes ───────────────────────────────────────────────────────────────
+
+    /// Tick cuisines you've tried without logging a meal (the checklist).
+    func addTastes(_ codes: [String]) async throws {
+        guard let myId, !codes.isEmpty else { return }
+        let before = tastes
+        let fresh = codes.filter { !tastedCodes.contains($0) }
+        for code in fresh {
+            tastes.append(Taste(userId: myId, countryCode: code, firstTasted: nil, lastTasted: nil,
+                                meals: 0, source: .manual, createdAt: Date()))
+        }
+        do {
+            try await backend.addTastes(codes)
+            guard self.myId == myId else { return }
+            backend.logEvent("tastes_added", props: ["count": String(codes.count)])
+            saveSnapshot()
+            await refreshTastes()
+        } catch {
+            if self.myId == myId { tastes = before }
+            throw error
+        }
+    }
+
+    func removeTaste(_ code: String) async throws {
+        let count = mealsByCountry[code]?.count ?? 0
+        guard count == 0 else {
+            throw AppError("Delete your \(count.counted("meal")) of \(Cuisine.name(for: code)) food first — they keep the stamp.")
+        }
+        let owner = myId
+        let before = tastes
+        tastes.removeAll { $0.countryCode == code }
+        do {
+            try await backend.removeTaste(countryCode: code)
+            if myId == owner { saveSnapshot() }
+        } catch {
+            if myId == owner { tastes = before }
+            throw error
+        }
+    }
+
+    /// Mirror of sync_taste_from_meal for instant feedback; the server's
+    /// answer replaces it moments later.
+    private func mergeLocalTaste(_ meal: Memory) {
+        guard let myId else { return }
+        if let index = tastes.firstIndex(where: { $0.countryCode == meal.countryCode }) {
+            var taste = tastes[index]
+            taste.firstTasted = min(taste.firstTasted ?? meal.date, meal.date)
+            taste.lastTasted = max(taste.lastTasted ?? meal.date, meal.date)
+            taste.meals += 1
+            tastes[index] = taste
+        } else {
+            tastes.append(Taste(userId: myId, countryCode: meal.countryCode, firstTasted: meal.date,
+                                lastTasted: meal.date, meals: 1, source: .meal, createdAt: Date()))
         }
     }
 
@@ -507,12 +595,12 @@ final class AppModel {
     /// Save somewhere you want to go. `from` credits the memory it came from.
     @discardableResult
     func savePlace(countryCode: String, title: String, city: String = "", lat: Double? = nil,
-                   lng: Double? = nil, note: String = "", tripId: UUID? = nil,
+                   lng: Double? = nil, note: String = "", tripId: UUID? = nil, cuisine: String? = nil,
                    from memory: Memory? = nil) async throws -> SavedPlace {
         guard let myId else { throw AppError("You're signed out.") }
         let place = try await backend.savePlace(
             NewSavedPlace(id: UUID(), userId: myId, tripId: tripId, countryCode: countryCode,
-                          title: title.trimmed, city: city.trimmed, lat: lat, lng: lng,
+                          cuisineCode: cuisine, title: title.trimmed, city: city.trimmed, lat: lat, lng: lng,
                           note: note.trimmed, sourceEntryId: memory?.id))
         guard self.myId == myId else { throw CancellationError() }
         savedPlaces.insert(place, at: 0)
@@ -568,6 +656,8 @@ final class AppModel {
             guard self.myId == myId else { throw CancellationError() }
             if let index = memories.firstIndex(where: { $0.id == saved.id }) {
                 memories[index] = saved
+            } else if let index = meals.firstIndex(where: { $0.id == saved.id }) {
+                meals[index] = saved
             }
             saveSnapshot()
         } catch {
@@ -659,6 +749,16 @@ final class AppModel {
         do {
             if let existing = savedPlace(from: memory) {
                 try await deletePlace(existing)
+            } else if memory.isMeal {
+                // A meal is a restaurant to try: filed where it is, tagged
+                // with what it serves.
+                let here = memory.lat.flatMap { lat in memory.lng.flatMap { PlaceLocator.country(lat: lat, lng: $0) } }
+                try await savePlace(countryCode: here ?? me?.homeCountry ?? memory.countryCode,
+                                    title: memory.restaurantName.isEmpty ? memory.displayTitle : memory.restaurantName,
+                                    city: memory.city ?? "", lat: memory.lat, lng: memory.lng,
+                                    note: memory.dish.isEmpty ? "" : "Try the \(memory.dish.lowercased())",
+                                    cuisine: memory.countryCode, from: memory)
+                celebrate("Saved to your restaurants")
             } else {
                 try await savePlace(countryCode: memory.countryCode, title: memory.title,
                                     city: memory.city ?? "", lat: memory.lat, lng: memory.lng,
@@ -873,6 +973,8 @@ final class AppModel {
         /// Optional so a snapshot written before trips existed still loads.
         var tripPlans: [TripPlan]?
         var savedPlaces: [SavedPlace]?
+        var meals: [Memory]?
+        var tastes: [Taste]?
         var bucketList: Set<String>
         var following: Set<UUID>
         var followers: Set<UUID>
@@ -884,7 +986,8 @@ final class AppModel {
     private func saveSnapshot() {
         guard let myId, !isDemo else { return }
         let snapshot = Snapshot(me: me, memories: memories, stamps: stamps,
-                                tripPlans: tripPlans, savedPlaces: savedPlaces, bucketList: bucketList,
+                                tripPlans: tripPlans, savedPlaces: savedPlaces, meals: meals, tastes: tastes,
+                                bucketList: bucketList,
                                 following: following, followers: followers, groups: groups,
                                 members: membersByGroup.values.flatMap { $0 },
                                 people: Array(people.values))
@@ -898,6 +1001,8 @@ final class AppModel {
         stamps = snapshot.stamps
         tripPlans = snapshot.tripPlans ?? []
         savedPlaces = snapshot.savedPlaces ?? []
+        meals = snapshot.meals ?? []
+        tastes = snapshot.tastes ?? []
         bucketList = snapshot.bucketList
         following = snapshot.following
         followers = snapshot.followers
@@ -910,10 +1015,15 @@ final class AppModel {
         visitedCodes = Set(stamps.map(\.countryCode))
         stampsByCode = Dictionary(stamps.map { ($0.countryCode, $0) }, uniquingKeysWith: { a, _ in a })
         memoriesByCountry = Dictionary(grouping: memories, by: \.countryCode)
+        tastedCodes = Set(tastes.map(\.countryCode))
+        tastesByCode = Dictionary(tastes.map { ($0.countryCode, $0) }, uniquingKeysWith: { a, _ in a })
+        mealsByCountry = Dictionary(grouping: meals, by: \.countryCode)
         placesByCountry = Dictionary(grouping: savedPlaces.filter { !$0.done }, by: \.countryCode)
+        restaurantsByCuisine = Dictionary(grouping: savedPlaces.filter { !$0.done && $0.cuisineCode != nil },
+                                          by: { $0.cuisineCode ?? "" })
         upcomingTrips = tripPlans.filter { !$0.isOver }
             .sorted { ($0.startsOn ?? "9999-99-99", $0.title) < ($1.startsOn ?? "9999-99-99", $1.title) }
-        stats = TravelStats(stamps: stamps, memories: memories)
+        stats = TravelStats(stamps: stamps, memories: memories, tastes: tastes, meals: meals.count)
     }
 
     /// Chapters of your travels: memories grouped into trips, named by the
@@ -937,6 +1047,9 @@ final class AppModel {
 
 /// The fields a person edits for one memory.
 struct MemoryDraft: Equatable {
+    var kind: Memory.Kind = .memory
+    var restaurantName = ""
+    var dish = ""
     var countryCode = ""
     var title = ""
     var city = ""
@@ -951,6 +1064,9 @@ struct MemoryDraft: Equatable {
     init() {}
 
     init(memory: Memory) {
+        kind = memory.kind
+        restaurantName = memory.restaurantName
+        dish = memory.dish
         countryCode = memory.countryCode
         title = memory.title
         city = memory.city ?? ""
@@ -963,15 +1079,17 @@ struct MemoryDraft: Equatable {
     }
 
     func newMemory(id: UUID, userId: UUID, photos: [String]) -> NewMemory {
-        NewMemory(id: id, userId: userId, countryCode: countryCode, title: title.trimmed, city: city.trimmed,
-                  dateTried: DayFormat.string(from: date), notes: notes.trimmed, photos: photos,
-                  lat: lat, lng: lng, visibility: visibility.rawValue)
+        NewMemory(id: id, userId: userId, kind: kind.rawValue, countryCode: countryCode, title: title.trimmed,
+                  city: city.trimmed, dateTried: DayFormat.string(from: date), notes: notes.trimmed,
+                  photos: photos, lat: lat, lng: lng, visibility: visibility.rawValue,
+                  restaurantName: restaurantName.trimmed, signatureDish: dish.trimmed)
     }
 
     func patch(photos: [String]) -> MemoryPatch {
         MemoryPatch(countryCode: countryCode, title: title.trimmed, city: city.trimmed,
                     dateTried: DayFormat.string(from: date), notes: notes.trimmed, photos: photos,
-                    lat: lat, lng: lng, visibility: visibility.rawValue)
+                    lat: lat, lng: lng, visibility: visibility.rawValue,
+                    restaurantName: restaurantName.trimmed, signatureDish: dish.trimmed)
     }
 }
 

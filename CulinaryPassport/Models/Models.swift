@@ -57,11 +57,15 @@ enum Visibility: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-/// A travel moment: photos, a place, a date, a few words. Stored as an
-/// `entries` row with kind = 'memory'.
+/// A travel moment or a meal: photos, a place, a date, a few words. Stored as
+/// an `entries` row — kind = 'memory' stamps the country Visited, kind =
+/// 'meal' stamps its cuisine Tasted (countryCode is the cuisine's country).
 struct Memory: Codable, Identifiable, Hashable {
+    enum Kind: String, Codable { case memory, meal }
+
     let id: UUID
     let userId: UUID
+    var kind: Kind
     var countryCode: String
     var title: String
     var city: String?
@@ -73,17 +77,26 @@ struct Memory: Codable, Identifiable, Hashable {
     var lng: Double?
     var visibility: Visibility
     let createdAt: Date
+    /// Meals: where, and what you had.
+    var restaurantName: String
+    var dish: String
 
     enum CodingKeys: String, CodingKey {
-        case id, userId, countryCode, title, city, notes, photos, lat, lng, visibility, createdAt
+        case id, userId, kind, countryCode, title, city, notes, photos, lat, lng, visibility, createdAt
+        case restaurantName
         case date = "dateTried"
+        case dish = "signatureDish"
     }
 
     init(id: UUID, userId: UUID, countryCode: String, title: String, city: String?,
          date: String, notes: String?, photos: [String], lat: Double?, lng: Double?,
-         visibility: Visibility, createdAt: Date) {
+         visibility: Visibility, createdAt: Date, kind: Kind = .memory,
+         restaurantName: String = "", dish: String = "") {
         self.id = id
         self.userId = userId
+        self.kind = kind
+        self.restaurantName = restaurantName
+        self.dish = dish
         self.countryCode = countryCode
         self.title = title
         self.city = city
@@ -100,6 +113,9 @@ struct Memory: Codable, Identifiable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         userId = try c.decode(UUID.self, forKey: .userId)
+        kind = (try? c.decode(Kind.self, forKey: .kind)) ?? .memory
+        restaurantName = try c.decodeIfPresent(String.self, forKey: .restaurantName) ?? ""
+        dish = try c.decodeIfPresent(String.self, forKey: .dish) ?? ""
         countryCode = try c.decode(String.self, forKey: .countryCode)
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         city = try c.decodeIfPresent(String.self, forKey: .city)
@@ -114,19 +130,46 @@ struct Memory: Codable, Identifiable, Hashable {
 
     var country: Country? { CountryStore.byCode[countryCode] }
 
-    /// "Fushimi Inari" / "Kyoto" / "Japan" — the best short name we have.
+    var isMeal: Bool { kind == .meal }
+
+    /// "Fushimi Inari" / "Kyoto" / "Japan" — or for a meal, "Khachapuri" /
+    /// "Supra" / "Georgian": the best short name we have.
     var displayTitle: String {
+        if isMeal {
+            if !dish.trimmed.isEmpty { return dish }
+            if !restaurantName.trimmed.isEmpty { return restaurantName }
+            return Cuisine.name(for: countryCode)
+        }
         if !title.trimmingCharacters(in: .whitespaces).isEmpty { return title }
         if let city, !city.isEmpty { return city }
         return country?.name ?? countryCode
     }
 
-    /// "Kyoto, Japan" — omits whatever the title already says.
+    /// "Kyoto, Japan" — or for a meal, "Supra, Brooklyn". Omits whatever the
+    /// title already says.
     var placeLine: String {
+        if isMeal {
+            var parts: [String] = []
+            if !restaurantName.isEmpty, restaurantName != displayTitle { parts.append(restaurantName) }
+            if let city, !city.isEmpty { parts.append(city) }
+            return parts.isEmpty ? Cuisine.name(for: countryCode) : parts.joined(separator: ", ")
+        }
         var parts: [String] = []
         if let city, !city.isEmpty, city != title { parts.append(city) }
         parts.append(country?.name ?? countryCode)
         return parts.joined(separator: ", ")
+    }
+
+    /// "🇬🇪 Georgian at Supra" for a meal, "🇯🇵 Kyoto, Japan" for a memory.
+    var feedLine: String {
+        guard isMeal else { return "\(country?.flag ?? "") \(placeLine)" }
+        let cuisine = "\(Country.flag(for: countryCode)) \(Cuisine.name(for: countryCode))"
+        return restaurantName.isEmpty ? cuisine : "\(cuisine) at \(restaurantName)"
+    }
+
+    /// "🇬🇪 Georgian" for a meal, "🇯🇵 Japan" for a memory.
+    var stampLine: String {
+        "\(Country.flag(for: countryCode)) \(isMeal ? Cuisine.name(for: countryCode) : country?.name ?? countryCode)"
     }
 
     var day: Date? { DayFormat.date(from: date) }
@@ -136,6 +179,7 @@ struct Memory: Codable, Identifiable, Hashable {
     /// response was lost may still have landed).
     func matches(_ patch: MemoryPatch) -> Bool {
         countryCode == patch.countryCode && title == patch.title && (city ?? "") == patch.city
+            && restaurantName == patch.restaurantName && dish == patch.signatureDish
             && String(date.prefix(10)) == patch.dateTried && (notes ?? "") == patch.notes
             && photos == patch.photos && lat == patch.lat && lng == patch.lng
             && visibility.rawValue == patch.visibility
@@ -147,7 +191,7 @@ struct Memory: Codable, Identifiable, Hashable {
 struct NewMemory: Encodable {
     let id: UUID
     let userId: UUID
-    let kind = "memory"
+    var kind = "memory"
     var countryCode: String
     var title: String
     var city: String
@@ -157,6 +201,8 @@ struct NewMemory: Encodable {
     var lat: Double?
     var lng: Double?
     var visibility: String
+    var restaurantName = ""
+    var signatureDish = ""
 }
 
 /// Full replacement of the editable fields. Encodes nil coordinates as
@@ -171,9 +217,12 @@ struct MemoryPatch: Encodable {
     var lat: Double?
     var lng: Double?
     var visibility: String
+    var restaurantName = ""
+    var signatureDish = ""
 
     enum CodingKeys: String, CodingKey {
         case countryCode, title, city, dateTried, notes, photos, lat, lng, visibility
+        case restaurantName, signatureDish
     }
 
     func encode(to encoder: Encoder) throws {
@@ -187,6 +236,59 @@ struct MemoryPatch: Encodable {
         try c.encode(lat, forKey: .lat)
         try c.encode(lng, forKey: .lng)
         try c.encode(visibility, forKey: .visibility)
+        try c.encode(restaurantName, forKey: .restaurantName)
+        try c.encode(signatureDish, forKey: .signatureDish)
+    }
+}
+
+/// A cuisine you've tasted (`tastes`) — the Tasted twin of a Stamp. Refitted
+/// from your meals on the server; a cuisine ticked on the checklist has no
+/// meals or dates.
+struct Taste: Codable, Identifiable, Hashable {
+    enum Source: String, Codable { case manual, meal }
+
+    let userId: UUID
+    let countryCode: String
+    var firstTasted: String?
+    var lastTasted: String?
+    var meals: Int
+    var source: Source
+    let createdAt: Date
+
+    init(userId: UUID, countryCode: String, firstTasted: String?, lastTasted: String?,
+         meals: Int, source: Source, createdAt: Date) {
+        self.userId = userId
+        self.countryCode = countryCode
+        self.firstTasted = firstTasted
+        self.lastTasted = lastTasted
+        self.meals = meals
+        self.source = source
+        self.createdAt = createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        userId = try c.decode(UUID.self, forKey: .userId)
+        countryCode = try c.decode(String.self, forKey: .countryCode)
+        firstTasted = try c.decodeIfPresent(String.self, forKey: .firstTasted)
+        lastTasted = try c.decodeIfPresent(String.self, forKey: .lastTasted)
+        meals = try c.decodeIfPresent(Int.self, forKey: .meals) ?? 0
+        source = (try? c.decode(Source.self, forKey: .source)) ?? .manual
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+    }
+
+    var id: String { "\(userId.uuidString)|\(countryCode)" }
+    var cuisine: String { Cuisine.name(for: countryCode) }
+
+    /// "2021" or "2019 – 2024"; nil for a cuisine ticked without meals.
+    var yearsText: String? {
+        let first = firstTasted.map { String($0.prefix(4)) }
+        let last = lastTasted.map { String($0.prefix(4)) }
+        switch (first, last) {
+        case let (f?, l?) where f != l: return "\(f) – \(l)"
+        case let (f?, _): return f
+        default: return nil
+        }
     }
 }
 

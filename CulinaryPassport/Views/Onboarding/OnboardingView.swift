@@ -16,6 +16,8 @@ struct OnboardingView: View {
     @State private var pickingHome = false
     @State private var showImport = false
     @State private var showChecklist = false
+    @State private var showCuisines = false
+    @State private var tasteBaseline = 0
     @State private var showPeople = false
     @State private var joinCode = ""
     @State private var joining = false
@@ -66,6 +68,14 @@ struct OnboardingView: View {
                 CountryChecklistView(onDone: {
                     showChecklist = false
                     if app.stamps.count > stampBaseline { step = .friends }
+                })
+            }
+        }
+        .sheet(isPresented: $showCuisines) {
+            NavigationStack {
+                CuisineChecklistView(onDone: {
+                    showCuisines = false
+                    if app.tastes.count > tasteBaseline { step = .friends }
                 })
             }
         }
@@ -160,27 +170,34 @@ struct OnboardingView: View {
         ScrollView {
             VStack(spacing: 20) {
                 VStack(spacing: 8) {
-                    Text("Where have you been?")
+                    Text("Start your passport")
                         .font(.displayLarge)
                         .foregroundStyle(Color.ink)
                         .multilineTextAlignment(.center)
-                    Text("Your camera roll already knows. It has the trips, the cities and the dates — the passport can just read them.")
+                    Text("Every country has two stamps: one for eating its food, one for going there.")
                         .font(.body)
                         .foregroundStyle(Color.inkSecondary)
                         .multilineTextAlignment(.center)
                 }
                 .padding(.top, 36)
 
+                optionCard(icon: "fork.knife",
+                           title: "Cuisines I've tried",
+                           detail: "Tap the food you've eaten — Thai, Ethiopian, Georgian… It takes a minute.",
+                           badge: "Fastest") {
+                    tasteBaseline = app.tastes.count
+                    showCuisines = true
+                }
                 optionCard(icon: "sparkle.magnifyingglass",
                            title: "Read my photos",
-                           detail: "Finds your trips — countries, cities and dates — in seconds. It happens on your phone, and nothing is uploaded.",
-                           badge: "Fastest") {
+                           detail: "Finds your trips — countries, cities and dates. It happens on your phone, and nothing is uploaded.",
+                           badge: nil) {
                     stampBaseline = app.stamps.count
                     tripBaseline = app.tripPlans.count
                     showImport = true
                 }
-                optionCard(icon: "checklist",
-                           title: "Pick countries",
+                optionCard(icon: "globe",
+                           title: "Countries I've been to",
                            detail: "Tap the places you've been, continent by continent.",
                            badge: nil) {
                     stampBaseline = app.stamps.count
@@ -188,10 +205,8 @@ struct OnboardingView: View {
                     showChecklist = true
                 }
 
-                if !app.stamps.isEmpty {
-                    Text(app.tripPlans.isEmpty
-                         ? "\(app.stats.countries.counted("country", "countries")) stamped so far"
-                         : "\(app.stats.countries.counted("country", "countries")) · \(app.tripPlans.count.counted("trip")) so far")
+                if !app.stamps.isEmpty || !app.tastes.isEmpty {
+                    Text("\(app.stats.cuisines.counted("cuisine")) · \(app.stats.countries.counted("country", "countries")) so far")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.brand)
                     Button("Continue") { step = .friends }

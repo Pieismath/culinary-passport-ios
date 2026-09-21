@@ -88,7 +88,7 @@ struct TripPlanDetailSheet: View {
                 }
             }
             .sheet(item: $editingPlace) { SavedPlaceEditorSheet(place: $0) }
-            .sheet(item: $loggingAt) { MemoryEditorView(mode: .atPlace($0)) }
+            .sheet(item: $loggingAt) { LogAtPlaceSheet(place: $0) }
             .sheet(isPresented: $addingMemory) {
                 MemoryEditorView(mode: .new(countryCode: current.countryCodes.first, pickPhotosFirst: true))
             }
@@ -207,7 +207,8 @@ struct SavedPlaceTag: View {
                     .font(.headline)
                     .foregroundStyle(place.done ? Color.inkTertiary : Color.ink)
                     .strikethrough(place.done, color: Color.inkTertiary)
-                Text("\(place.country?.flag ?? "") \(place.placeLine)")
+                Text(place.cuisineCode.map { "\(Country.flag(for: $0)) \(Cuisine.name(for: $0)) · \(place.city.isEmpty ? place.placeLine : place.city)" }
+                     ?? "\(place.country?.flag ?? "") \(place.placeLine)")
                     .font(.caption)
                     .foregroundStyle(Color.inkSecondary)
                 if !place.note.isEmpty {
@@ -225,7 +226,10 @@ struct SavedPlaceTag: View {
             Spacer(minLength: 4)
 
             Menu {
-                Button { onLog?() } label: { Label("Log a memory here", systemImage: "photo.badge.plus") }
+                Button { onLog?() } label: {
+                    Label(place.isRestaurant ? "Log a meal here" : "Log a memory here",
+                          systemImage: place.isRestaurant ? "fork.knife" : "photo.badge.plus")
+                }
                 Button { onEdit?() } label: { Label("Edit", systemImage: "pencil") }
                 Button(role: .destructive) {
                     Task {

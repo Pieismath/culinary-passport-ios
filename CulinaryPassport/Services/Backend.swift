@@ -44,6 +44,14 @@ protocol Backend: AnyObject {
     func bucketList() async throws -> Set<String>
     func setBucketListed(_ code: String, _ on: Bool) async throws
 
+    // ── Meals + tastes ───────────────────────────────────────────────────────
+    /// Meals are entries with kind = 'meal'; their countryCode is the cuisine.
+    func meals(userId: UUID) async throws -> [Memory]
+    func meals(countryCode: String, userIds: [UUID]) async throws -> [Memory]
+    func tastes(userIds: [UUID]) async throws -> [Taste]
+    func addTastes(_ codes: [String]) async throws
+    func removeTaste(countryCode: String) async throws
+
     // ── Trips + saved places ─────────────────────────────────────────────────
     func tripPlans() async throws -> [TripPlan]
     func createTripPlan(_ plan: NewTripPlan) async throws -> TripPlan

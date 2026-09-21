@@ -11,6 +11,7 @@ final class DemoBackend: Backend {
     private var profilesById: [UUID: Profile] = [:]
     private var memoriesById: [UUID: Memory] = [:]
     private var stampsByKey: [String: Stamp] = [:]
+    private var tastesByKey: [String: Taste] = [:]
     /// Dates given directly (import/checklist), like stamps.stamped_first/last.
     private var stampedDates: [String: (first: String?, last: String?)] = [:]
     private var bucket: Set<String> = []
@@ -61,6 +62,14 @@ final class DemoBackend: Backend {
             stampFromMemoryLocked(m)
         }
     }
+    func seedTaste(_ t: Taste) {
+        sync {
+            let key = "\(t.userId)|\(t.countryCode)"
+            if tastesByKey[key] == nil { tastesByKey[key] = t }
+            refitTasteLocked(user: t.userId, code: t.countryCode)
+        }
+    }
+
     func seedStamp(_ s: Stamp) {
         sync {
             let key = "\(s.userId)|\(s.countryCode)"
@@ -111,6 +120,7 @@ final class DemoBackend: Backend {
     }
 
     private func stampFromMemoryLocked(_ m: Memory) {
+        guard !m.isMeal else { return tasteFromMealLocked(m) }
         let key = "\(m.userId)|\(m.countryCode)"
         if stampsByKey[key] == nil {
             stampsByKey[key] = Stamp(userId: m.userId, countryCode: m.countryCode,
@@ -120,9 +130,12 @@ final class DemoBackend: Backend {
         refitStampLocked(user: m.userId, code: m.countryCode)
     }
 
-    private func dropMemoryOnlyStampLocked(user: UUID, code: String, except id: UUID) {
+    private func dropMemoryOnlyStampLocked(user: UUID, code: String, except id: UUID, meal: Bool = false) {
+        guard !meal else { return dropMealOnlyTasteLocked(user: user, code: code, except: id) }
         let key = "\(user)|\(code)"
-        let others = memoriesById.values.contains { $0.userId == user && $0.countryCode == code && $0.id != id }
+        let others = memoriesById.values.contains {
+            !$0.isMeal && $0.userId == user && $0.countryCode == code && $0.id != id
+        }
         if !others, stampsByKey[key]?.source == .memory {
             stampsByKey[key] = nil
             stampedDates[key] = nil
@@ -135,12 +148,44 @@ final class DemoBackend: Backend {
         let key = "\(user)|\(code)"
         guard var stamp = stampsByKey[key] else { return }
         let days = memoriesById.values
-            .filter { $0.userId == user && $0.countryCode == code }
+            .filter { !$0.isMeal && $0.userId == user && $0.countryCode == code }
             .map { String($0.date.prefix(10)) }
         let given = stampedDates[key]
         stamp.firstVisited = ([given?.first].compactMap { $0 } + days).min()
         stamp.lastVisited = ([given?.last].compactMap { $0 } + days).max()
         stampsByKey[key] = stamp
+    }
+
+    // Tastes mirror tastes + sync_taste_from_meal: a meal tastes its
+    // cuisine; its last meal going takes a meal-only taste with it.
+    private func tasteFromMealLocked(_ m: Memory) {
+        let key = "\(m.userId)|\(m.countryCode)"
+        if tastesByKey[key] == nil {
+            tastesByKey[key] = Taste(userId: m.userId, countryCode: m.countryCode, firstTasted: nil,
+                                     lastTasted: nil, meals: 0, source: .meal, createdAt: m.createdAt)
+        }
+        refitTasteLocked(user: m.userId, code: m.countryCode)
+    }
+
+    private func dropMealOnlyTasteLocked(user: UUID, code: String, except id: UUID) {
+        let key = "\(user)|\(code)"
+        let others = memoriesById.values.contains {
+            $0.isMeal && $0.userId == user && $0.countryCode == code && $0.id != id
+        }
+        if !others, tastesByKey[key]?.source == .meal { tastesByKey[key] = nil }
+        refitTasteLocked(user: user, code: code)
+    }
+
+    private func refitTasteLocked(user: UUID, code: String) {
+        let key = "\(user)|\(code)"
+        guard var taste = tastesByKey[key] else { return }
+        let days = memoriesById.values
+            .filter { $0.isMeal && $0.userId == user && $0.countryCode == code }
+            .map { String($0.date.prefix(10)) }
+        taste.firstTasted = days.min()
+        taste.lastTasted = days.max()
+        taste.meals = days.count
+        tastesByKey[key] = taste
     }
 
     // ── Session ──────────────────────────────────────────────────────────────
@@ -210,9 +255,51 @@ final class DemoBackend: Backend {
     func memories(userId: UUID) async throws -> [Memory] {
         await wait()
         return sync {
-            memoriesById.values.filter { $0.userId == userId && canSeeLocked($0) }
+            memoriesById.values.filter { !$0.isMeal && $0.userId == userId && canSeeLocked($0) }
                 .sorted { ($0.date, $0.createdAt) > ($1.date, $1.createdAt) }
         }
+    }
+
+    func meals(userId: UUID) async throws -> [Memory] {
+        await wait()
+        return sync {
+            memoriesById.values.filter { $0.isMeal && $0.userId == userId && canSeeLocked($0) }
+                .sorted { ($0.date, $0.createdAt) > ($1.date, $1.createdAt) }
+        }
+    }
+
+    func meals(countryCode: String, userIds: [UUID]) async throws -> [Memory] {
+        await wait()
+        let ids = Set(userIds)
+        return sync {
+            memoriesById.values
+                .filter { $0.isMeal && $0.countryCode == countryCode && ids.contains($0.userId) && canSeeLocked($0) }
+                .sorted { $0.date > $1.date }
+        }
+    }
+
+    func tastes(userIds: [UUID]) async throws -> [Taste] {
+        let ids = Set(userIds)
+        return sync {
+            tastesByKey.values.filter { ids.contains($0.userId) && canSeeProfileLocked($0.userId) }
+        }
+    }
+
+    func addTastes(_ codes: [String]) async throws {
+        await wait()
+        sync {
+            for code in codes.map({ $0.uppercased() }) where tastesByKey["\(me)|\(code)"] == nil {
+                tastesByKey["\(me)|\(code)"] = Taste(userId: me, countryCode: code, firstTasted: nil,
+                                                      lastTasted: nil, meals: 0, source: .manual,
+                                                      createdAt: Date())
+                refitTasteLocked(user: me, code: code)
+            }
+        }
+    }
+
+    func removeTaste(countryCode: String) async throws {
+        await wait()
+        sync { tastesByKey["\(me)|\(countryCode)"] = nil }
     }
 
     func memory(id: UUID) async throws -> Memory? {
@@ -228,7 +315,7 @@ final class DemoBackend: Backend {
         let ids = Set(userIds)
         return sync {
             memoriesById.values
-                .filter { $0.countryCode == countryCode && ids.contains($0.userId) && canSeeLocked($0) }
+                .filter { !$0.isMeal && $0.countryCode == countryCode && ids.contains($0.userId) && canSeeLocked($0) }
                 .sorted { $0.date > $1.date }
         }
     }
@@ -238,7 +325,9 @@ final class DemoBackend: Backend {
         let memory = Memory(id: new.id, userId: me, countryCode: new.countryCode, title: new.title,
                             city: new.city, date: new.dateTried, notes: new.notes, photos: new.photos,
                             lat: new.lat, lng: new.lng,
-                            visibility: Visibility(rawValue: new.visibility) ?? .friends, createdAt: Date())
+                            visibility: Visibility(rawValue: new.visibility) ?? .friends, createdAt: Date(),
+                            kind: Memory.Kind(rawValue: new.kind) ?? .memory,
+                            restaurantName: new.restaurantName, dish: new.signatureDish)
         let fault = takeFault()
         if fault == .beforeWrite { throw URLError(.notConnectedToInternet) }
         try sync {
@@ -282,9 +371,11 @@ final class DemoBackend: Backend {
             memory.lat = patch.lat
             memory.lng = patch.lng
             memory.visibility = Visibility(rawValue: patch.visibility) ?? .friends
+            memory.restaurantName = patch.restaurantName
+            memory.dish = patch.signatureDish
             memoriesById[id] = memory
             if oldCode != memory.countryCode {
-                dropMemoryOnlyStampLocked(user: me, code: oldCode, except: id)
+                dropMemoryOnlyStampLocked(user: me, code: oldCode, except: id, meal: memory.isMeal)
             }
             stampFromMemoryLocked(memory)
             return memory
@@ -297,7 +388,8 @@ final class DemoBackend: Backend {
         await wait()
         sync {
             memoriesById[memory.id] = nil
-            dropMemoryOnlyStampLocked(user: memory.userId, code: memory.countryCode, except: memory.id)
+            dropMemoryOnlyStampLocked(user: memory.userId, code: memory.countryCode, except: memory.id,
+                                      meal: memory.isMeal)
             reactions.removeAll { $0.entryId == memory.id }
             comments.removeAll { $0.entryId == memory.id }
         }
@@ -443,7 +535,7 @@ final class DemoBackend: Backend {
         let made = SavedPlace(id: place.id, userId: me, tripId: place.tripId, countryCode: place.countryCode,
                               title: place.title, city: place.city, lat: place.lat, lng: place.lng,
                               note: place.note, sourceEntryId: place.sourceEntryId, done: false,
-                              createdAt: Date())
+                              createdAt: Date(), cuisineCode: place.cuisineCode)
         sync { places.append(made) }
         return made
     }
@@ -752,6 +844,8 @@ enum DemoPhotos {
         let emoji: String
         var water = false
         var night = false
+        /// A dish on a table rather than a view.
+        var plate = false
     }
 
     private static let scenes: [String: Scene] = [
@@ -783,6 +877,22 @@ enum DemoPhotos {
         "cappadocia": Scene(top: 0xF7C89B, bottom: 0xF09A7A, ground: 0x9E6A4B, emoji: "🎈"),
         "iguazu": Scene(top: 0xB8E0C8, bottom: 0x6FB59A, ground: 0x2F6A4F, emoji: "💦", water: true),
         "reykjavik": Scene(top: 0x112A3E, bottom: 0x2FA38A, ground: 0x0B1A26, emoji: "🌌", night: true),
+        // Meals
+        "khachapuri": Scene(top: 0xF4DDB5, bottom: 0xD9A56B, ground: 0x6E3E22, emoji: "🧀", plate: true),
+        "injera": Scene(top: 0xF0D6B0, bottom: 0xB9764A, ground: 0x5A3421, emoji: "🍛", plate: true),
+        "ramen": Scene(top: 0x3B2A26, bottom: 0x8A5A3C, ground: 0x1E1512, emoji: "🍜", plate: true),
+        "tacos": Scene(top: 0xF7E1A0, bottom: 0xE39A55, ground: 0x7A3B1E, emoji: "🌮", plate: true),
+        "pho": Scene(top: 0xE9EFE2, bottom: 0xA9BF9A, ground: 0x49613F, emoji: "🍲", plate: true),
+        "ceviche": Scene(top: 0xE4F3F1, bottom: 0x8FCBC0, ground: 0x2E6E66, emoji: "🐟", plate: true),
+        "bibimbap": Scene(top: 0x2B2B2B, bottom: 0x6B4A3A, ground: 0x151515, emoji: "🥘", plate: true),
+        "dosa": Scene(top: 0xF6E7C6, bottom: 0xD9A441, ground: 0x7A4E18, emoji: "🫓", plate: true),
+        "pasta": Scene(top: 0xF5E9DA, bottom: 0xD08A5C, ground: 0x6B3A26, emoji: "🍝", plate: true),
+        "khaosoi": Scene(top: 0xF7DFA8, bottom: 0xE0913C, ground: 0x6E3A15, emoji: "🍜", plate: true),
+        "teasalad": Scene(top: 0xE6EFD2, bottom: 0x9BB36B, ground: 0x4A5A2A, emoji: "🥗", plate: true),
+        "mantu": Scene(top: 0xF3E6D6, bottom: 0xC99A77, ground: 0x6B4A33, emoji: "🥟", plate: true),
+        "plov": Scene(top: 0xF5E2BC, bottom: 0xD7964D, ground: 0x7A4A1C, emoji: "🍚", plate: true),
+        "arepa": Scene(top: 0xF8ECCB, bottom: 0xE3B25E, ground: 0x7C5220, emoji: "🫓", plate: true),
+        "churrasco": Scene(top: 0x3A2320, bottom: 0x9A4A32, ground: 0x1E1210, emoji: "🥩", plate: true),
     ]
 
     private static var cache: [String: Data] = [:]
@@ -813,6 +923,23 @@ enum DemoPhotos {
             let colors = [UIColor(rgb: scene.top).cgColor, UIColor(rgb: scene.bottom).cgColor] as CFArray
             if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
                 cg.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: 0, y: size.height * 0.75), options: [.drawsAfterEndLocation])
+            }
+
+            if scene.plate {
+                // A table from above: the plate, its rim, the dish.
+                let centre = CGPoint(x: size.width / 2 + CGFloat((variant - 1) * 40), y: size.height * 0.5)
+                UIColor.black.withAlphaComponent(0.18).setFill()
+                cg.fillEllipse(in: CGRect(x: centre.x - 410, y: centre.y - 380, width: 820, height: 820))
+                UIColor(white: 0.97, alpha: 1).setFill()
+                cg.fillEllipse(in: CGRect(x: centre.x - 400, y: centre.y - 400, width: 800, height: 800))
+                UIColor(rgb: scene.ground).withAlphaComponent(0.12).setFill()
+                cg.fillEllipse(in: CGRect(x: centre.x - 300, y: centre.y - 300, width: 600, height: 600))
+                let dish = scene.emoji as NSString
+                let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 380)]
+                let dishSize = dish.size(withAttributes: attrs)
+                dish.draw(at: CGPoint(x: centre.x - dishSize.width / 2, y: centre.y - dishSize.height / 2),
+                          withAttributes: attrs)
+                return
             }
 
             // Sun or moon

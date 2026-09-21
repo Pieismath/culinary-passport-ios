@@ -9,10 +9,15 @@ struct StampBadge: View {
     var size: CGFloat = 104
     /// Ghost stamps (not yet visited) render faint and dashed.
     var inked = true
+    /// The Tasted stamp: the cuisine's name ("GEORGIAN") and a fork and
+    /// knife where a visa stamp would have its border crossing.
+    var tasted = false
 
     private var country: Country? { CountryStore.byCode[code] }
     private var ink: Color { inked ? StampInk.color(for: code) : .inkTertiary }
-    private var shapeKind: Int { StampInk.stableHash(code + "shape") % 3 }
+    /// Tasted stamps take a different shape from the visa stamp for the same
+    /// country, so the two sit side by side on a page without matching.
+    private var shapeKind: Int { StampInk.stableHash(code + (tasted ? "taste" : "shape")) % 3 }
 
     var body: some View {
         ZStack {
@@ -24,6 +29,11 @@ struct StampBadge: View {
                     .font(.system(size: size * 0.24))
                     .grayscale(inked ? 0 : 1)
                     .opacity(inked ? 1 : 0.5)
+                if tasted {
+                    Image(systemName: "fork.knife")
+                        .font(.system(size: size * 0.075, weight: .bold))
+                        .padding(.top, -size * 0.01)
+                }
                 Text(label)
                     .font(.system(size: size * 0.085, weight: .heavy, design: .rounded))
                     .tracking(size * 0.008)
@@ -44,11 +54,13 @@ struct StampBadge: View {
         .rotationEffect(.degrees(inked ? StampInk.tilt(for: code) : 0))
         .opacity(inked ? 0.94 : 0.8)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(country?.name ?? code)\(subtitle.map { ", \($0)" } ?? "")")
+        .accessibilityLabel(tasted
+                            ? "\(Cuisine.name(for: code)) food, tasted\(subtitle.map { ", \($0)" } ?? "")"
+                            : "\(country?.name ?? code)\(subtitle.map { ", \($0)" } ?? "")")
     }
 
     private var label: String {
-        (country?.name ?? code).uppercased()
+        (tasted ? Cuisine.name(for: code) : country?.name ?? code).uppercased()
     }
 
     @ViewBuilder private var outline: some View {
@@ -109,12 +121,13 @@ struct PerforatedRectangle: Shape {
     }
 }
 
-/// A big celebratory postage stamp: flag, country, "Nº 24", date.
+/// A big celebratory postage stamp: flag, country (or cuisine), "Nº 24", date.
 struct PostageStamp: View {
     let code: String
     var number: Int?
     var date: String?
     var width: CGFloat = 230
+    var tasted = false
 
     private var country: Country? { CountryStore.byCode[code] }
 
@@ -137,7 +150,12 @@ struct PostageStamp: View {
                 .font(.system(size: width * 0.34))
                 .padding(.vertical, 6)
 
-            Text((country?.name ?? code).uppercased())
+            if tasted {
+                Label("FIRST TASTE", systemImage: "fork.knife")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(ink)
+            }
+            Text((tasted ? Cuisine.name(for: code) : country?.name ?? code).uppercased())
                 .font(.system(size: 20, weight: .bold, design: .serif))
                 .tracking(1.5)
                 .multilineTextAlignment(.center)

@@ -181,6 +181,8 @@ final class FeedModel {
     var newStamps: [Stamp] = []
     /// Stamps of authors, to badge a memory as their first time in a country.
     var authorStamps: [String: Stamp] = [:]
+    /// Authors' tastes, to badge a meal as their first of a cuisine.
+    var authorTastes: [String: Taste] = [:]
     var loaded = false
     var loadingMore = false
     var exhausted = false
@@ -258,6 +260,10 @@ final class FeedModel {
         if let stamps = try? await app.backend.stamps(userIds: authors) {
             for stamp in stamps { authorStamps["\(stamp.userId)|\(stamp.countryCode)"] = stamp }
         }
+        let cooks = Array(Set(page.filter(\.isMeal).map(\.userId)))
+        if !cooks.isEmpty, let tastes = try? await app.backend.tastes(userIds: cooks) {
+            for taste in tastes { authorTastes["\(taste.userId)|\(taste.countryCode)"] = taste }
+        }
     }
 
     func tallies(for id: UUID, me: UUID?) -> [ReactionTally] {
@@ -266,6 +272,12 @@ final class FeedModel {
 
     /// "New stamp" when this memory is the author's first visit to the country.
     func firstVisitBadge(for memory: Memory) -> String? {
+        if memory.isMeal {
+            guard let taste = authorTastes["\(memory.userId)|\(memory.countryCode)"],
+                  taste.firstTasted == memory.date,
+                  Date().timeIntervalSince(memory.createdAt) < 30 * 86_400 else { return nil }
+            return "First taste"
+        }
         guard let stamp = authorStamps["\(memory.userId)|\(memory.countryCode)"],
               stamp.firstVisited == memory.date,
               Date().timeIntervalSince(memory.createdAt) < 30 * 86_400 else { return nil }

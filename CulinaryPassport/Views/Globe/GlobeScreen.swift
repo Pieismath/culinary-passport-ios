@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Home: your globe. Visited countries wear your color (deeper with every
-/// memory), your bucket list glows amber, and a tap opens what's there —
-/// your memories, and which friends have been.
+/// Home: your globe. Countries you've visited wear your colour (deeper with
+/// every memory), cuisines you've tasted wear a lighter wash of it, your
+/// bucket list glows amber, and a tap opens what's there.
 struct GlobeScreen: View {
     @Environment(AppModel.self) private var app
     @Environment(\.colorScheme) private var scheme
@@ -17,16 +17,22 @@ struct GlobeScreen: View {
     enum GlobeSheet: Identifiable {
         case search
         case addMemory(country: String?)
+        case logMeal(cuisine: String?)
+        case dinner
         case importPhotos
         case checklist
+        case cuisines
         case friendsIn(String)
 
         var id: String {
             switch self {
             case .search: "search"
             case .addMemory(let code): "add-\(code ?? "")"
+            case .logMeal(let code): "meal-\(code ?? "")"
+            case .dinner: "dinner"
             case .importPhotos: "import"
             case .checklist: "checklist"
+            case .cuisines: "cuisines"
             case .friendsIn(let code): "friends-\(code)"
             }
         }
@@ -52,16 +58,20 @@ struct GlobeScreen: View {
                 onLongPress: { code in
                     sheet = .addMemory(country: code)
                 },
-                isEmphasized: { app.visitedCodes.contains($0) || app.bucketList.contains($0) }
+                isEmphasized: {
+                    app.visitedCodes.contains($0) || app.tastedCodes.contains($0) || app.bucketList.contains($0)
+                }
             )
             .ignoresSafeArea()
             // SceneKit is opaque to VoiceOver: describe the globe and offer
             // the same jobs through actions (search finds any country).
             .accessibilityElement()
             .accessibilityLabel("Globe")
-            .accessibilityValue("\(app.stats.countries) countries visited, \(app.stats.worldPercentText) of the world")
+            .accessibilityValue("\(app.stats.countries) countries visited, \(app.stats.cuisines) cuisines tasted")
             .accessibilityHint("Use Find a country to open any country's details.")
             .accessibilityAction(named: "Find a country") { sheet = .search }
+            .accessibilityAction(named: "Log a meal") { sheet = .logMeal(cuisine: nil) }
+            .accessibilityAction(named: "What's for dinner?") { sheet = .dinner }
             .accessibilityAction(named: "Add a memory") { sheet = .addMemory(country: nil) }
 
             bottomArea
@@ -74,6 +84,12 @@ struct GlobeScreen: View {
                 CountrySearchSheet { code in fly(to: code) }
             case .addMemory(let code):
                 MemoryEditorView(mode: .new(countryCode: code, pickPhotosFirst: code == nil))
+            case .logMeal(let code):
+                MealEditorView(mode: .new(cuisine: code, place: nil))
+            case .dinner:
+                DinnerDiceSheet(people: [], onLanded: { code in fly(to: code) })
+            case .cuisines:
+                NavigationStack { CuisineChecklistView(onDone: { self.sheet = nil }) }
             case .importPhotos:
                 NavigationStack { PhotoImportView(onDone: { self.sheet = nil }) }
             case .checklist:
@@ -110,14 +126,19 @@ struct GlobeScreen: View {
                 Text("Stampd")
                     .font(.wordmark)
                     .foregroundStyle(Color.brand)
-                if app.stats.countries + app.stats.territories > 0 {
+                if app.stats.countries + app.stats.territories + app.stats.cuisines > 0 {
                     HStack(spacing: 6) {
+                        Image(systemName: "airplane").foregroundStyle(Color.inkSecondary)
                         Text("\(app.stats.countries)")
                             .font(.number(.subheadline))
                             .contentTransition(.numericText())
                         Text(app.stats.countries == 1 ? "country" : "countries")
                         Text("·").foregroundStyle(Color.inkTertiary)
-                        Text("\(app.stats.worldPercentText) of the world")
+                        Image(systemName: "fork.knife").foregroundStyle(Color.inkSecondary)
+                        Text("\(app.stats.cuisines)")
+                            .font(.number(.subheadline))
+                            .contentTransition(.numericText())
+                        Text(app.stats.cuisines == 1 ? "cuisine" : "cuisines")
                     }
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.ink)
@@ -126,7 +147,7 @@ struct GlobeScreen: View {
                     .background(.regularMaterial, in: Capsule())
                     .overlay(Capsule().strokeBorder(Color.hairline.opacity(0.6), lineWidth: 0.5))
                     .accessibilityElement(children: .combine)
-                    .animation(.snappy, value: app.stats.countries)
+                    .animation(.snappy, value: app.stats.countries + app.stats.cuisines)
                 }
             }
             Spacer()
@@ -135,8 +156,11 @@ struct GlobeScreen: View {
                     sheet = .search
                 }
                 Menu {
+                    Button { sheet = .dinner } label: {
+                        Label("What's for dinner?", systemImage: "fork.knife")
+                    }
                     Button { spin(bucketOnly: false) } label: {
-                        Label("Somewhere new", systemImage: "sparkles")
+                        Label("Where next? (travel)", systemImage: "airplane")
                     }
                     Button { spin(bucketOnly: true) } label: {
                         Label("From my bucket list", systemImage: "bookmark")
@@ -152,10 +176,11 @@ struct GlobeScreen: View {
                         .shadow(color: .black.opacity(0.10), radius: 6, y: 3)
                         .symbolEffect(.bounce, value: flying)
                 } primaryAction: {
-                    spin(bucketOnly: false)
+                    sheet = .dinner
                 }
                 .disabled(flying)
-                .accessibilityLabel("Where next? Spin the globe")
+                .accessibilityLabel("What's for dinner? Roll a cuisine")
+                .accessibilityHint("Hold for travel ideas.")
             }
         }
         .padding(.horizontal, Metrics.gutter)
@@ -169,17 +194,25 @@ struct GlobeScreen: View {
             CountryPanel(
                 country: country,
                 stamp: app.stampsByCode[code],
-                memories: app.memoriesByCountry[code] ?? [],
+                taste: app.tastesByCode[code],
+                memories: ((app.memoriesByCountry[code] ?? []) + (app.mealsByCountry[code] ?? []))
+                    .sorted { ($0.date, $0.createdAt) > ($1.date, $1.createdAt) },
                 isBucketListed: app.bucketList.contains(code),
                 isHome: app.me?.homeCountry == code,
                 friends: friendsWhoHaveBeen(code),
                 onClose: { selected = nil },
                 onAddMemory: { sheet = .addMemory(country: code) },
+                onLogMeal: { sheet = .logMeal(cuisine: Cuisine.isCuisine(code) ? code : nil) },
                 onStamp: { stamp(code) },
                 onToggleBucket: { app.toggleBucketList(code) },
                 onOpenMemory: { viewingMemory = $0 },
                 onShowFriends: { sheet = .friendsIn(code) },
-                onRemoveStamp: { Task { await removeStamp(code) } }
+                onRemoveStamp: { Task { await removeStamp(code) } },
+                onRemoveTaste: {
+                    Task {
+                        do { try await app.removeTaste(code) } catch { app.show(error) }
+                    }
+                }
             )
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
@@ -202,7 +235,8 @@ struct GlobeScreen: View {
                     .card(padding: 12)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                if app.loadState == .loaded && app.stamps.isEmpty && app.memories.isEmpty {
+                if app.loadState == .loaded && app.stamps.isEmpty && app.memories.isEmpty
+                    && app.tastes.isEmpty && app.meals.isEmpty {
                     BuildPassportCard(
                         onScan: { sheet = .importPhotos },
                         onPick: { sheet = .checklist }
@@ -210,8 +244,8 @@ struct GlobeScreen: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 } else {
                     HStack(alignment: .bottom) {
-                        if app.stamps.count < 4 && !flying {
-                            Label("Tap a country · hold to add a memory", systemImage: "hand.tap")
+                        if app.stamps.count + app.tastes.count < 4 && !flying {
+                            Label("Tap a country · + to log a meal", systemImage: "hand.tap")
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(Color.inkSecondary)
                                 .padding(.horizontal, 12)
@@ -231,14 +265,21 @@ struct GlobeScreen: View {
 
     private var addMenu: some View {
         Menu {
+            Button { sheet = .logMeal(cuisine: nil) } label: {
+                Label("Log a meal", systemImage: "fork.knife")
+            }
             Button { sheet = .addMemory(country: nil) } label: {
-                Label("Add a memory", systemImage: "photo.badge.plus")
+                Label("Add a travel memory", systemImage: "airplane")
+            }
+            Divider()
+            Button { sheet = .cuisines } label: {
+                Label("Mark cuisines I've tried", systemImage: "checklist")
             }
             Button { sheet = .importPhotos } label: {
-                Label("Find countries in my photos", systemImage: "sparkle.magnifyingglass")
+                Label("Find trips in my photos", systemImage: "sparkle.magnifyingglass")
             }
             Button { sheet = .checklist } label: {
-                Label("Mark countries I've been to", systemImage: "checklist")
+                Label("Mark countries I've been to", systemImage: "globe")
             }
         } label: {
             Image(systemName: "plus")
@@ -248,10 +289,10 @@ struct GlobeScreen: View {
                 .background(Color.brand, in: Circle())
                 .shadow(color: .black.opacity(0.22), radius: 10, y: 4)
         } primaryAction: {
-            sheet = .addMemory(country: nil)
+            sheet = .logMeal(cuisine: nil)
         }
-        .accessibilityLabel("Add")
-        .accessibilityHint("Add a memory. Hold for more options.")
+        .accessibilityLabel("Log a meal")
+        .accessibilityHint("Hold for travel memories and more.")
     }
 
     // ── Actions ──────────────────────────────────────────────────────────────
@@ -261,6 +302,7 @@ struct GlobeScreen: View {
         if app.visitedCodes.contains(code) {
             return style.visited(tint, memories: app.memoriesByCountry[code]?.count ?? 0, selected: isSelected)
         }
+        if app.tastedCodes.contains(code) { return style.tasted(tint, selected: isSelected) }
         if app.bucketList.contains(code) { return style.bucketListed(selected: isSelected) }
         return style.untouched(selected: isSelected)
     }
@@ -380,17 +422,20 @@ struct BuildPassportCard: View {
 struct CountryPanel: View {
     let country: Country
     let stamp: Stamp?
+    var taste: Taste?
     let memories: [Memory]
     let isBucketListed: Bool
     let isHome: Bool
     let friends: [Profile]
     let onClose: () -> Void
     let onAddMemory: () -> Void
+    var onLogMeal: () -> Void = {}
     let onStamp: () -> Void
     let onToggleBucket: () -> Void
     let onOpenMemory: (Memory) -> Void
     let onShowFriends: () -> Void
     let onRemoveStamp: () -> Void
+    var onRemoveTaste: () -> Void = {}
 
     @State private var confirmRemove = false
 
@@ -470,33 +515,42 @@ struct CountryPanel: View {
             }
 
             HStack(spacing: 10) {
-                if visited {
-                    Button(action: onAddMemory) {
-                        Label("Add a memory", systemImage: "photo.badge.plus")
+                // Eating is the everyday stamp; it leads wherever the country
+                // has a cuisine to taste.
+                if Cuisine.isCuisine(country.code) {
+                    Button(action: onLogMeal) {
+                        Label("Log a meal", systemImage: "fork.knife")
                     }
                     .buttonStyle(.primary)
-                    Menu {
-                        Button(role: .destructive) { confirmRemove = true } label: {
-                            Label("Remove stamp", systemImage: "minus.circle")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 17, weight: .bold))
-                            .foregroundStyle(Color.ink)
-                            .frame(width: 50, height: 50)
-                            .background(Color.sunken, in: Circle())
-                    }
-                    .accessibilityLabel("More")
-                } else {
-                    Button(action: onStamp) {
-                        Label("I've been here", systemImage: "checkmark.seal")
-                    }
-                    .buttonStyle(.primary)
-                    Button(action: onAddMemory) {
-                        Label("Memory", systemImage: "photo.badge.plus")
-                    }
-                    .buttonStyle(SecondaryButtonStyle(fullWidth: false))
                 }
+                if !visited {
+                    Button(action: onStamp) {
+                        Label("Been here", systemImage: "checkmark.seal")
+                    }
+                    .buttonStyle(SecondaryButtonStyle(fullWidth: !Cuisine.isCuisine(country.code)))
+                }
+                Menu {
+                    Button(action: onAddMemory) {
+                        Label("Add a travel memory", systemImage: "airplane")
+                    }
+                    if visited {
+                        Button(role: .destructive) { confirmRemove = true } label: {
+                            Label("Remove visited stamp", systemImage: "minus.circle")
+                        }
+                    }
+                    if taste != nil {
+                        Button(role: .destructive, action: onRemoveTaste) {
+                            Label("Remove tasted stamp", systemImage: "fork.knife.circle")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(Color.ink)
+                        .frame(width: 50, height: 50)
+                        .background(Color.sunken, in: Circle())
+                }
+                .accessibilityLabel("More")
             }
         }
         .padding(16)
@@ -521,6 +575,14 @@ struct CountryPanel: View {
                 Pill(systemImage: "checkmark.seal.fill",
                      text: stamp.yearsText.map { "Visited \($0)" } ?? "Visited",
                      tint: .brand, background: .brandSoft)
+            }
+            if let taste {
+                Pill(systemImage: "fork.knife",
+                     text: taste.meals > 0 ? "Tasted · \(taste.meals.counted("meal"))" : "Tasted",
+                     tint: .brand, background: .brandSoft)
+            }
+            if stamp != nil || taste != nil {
+                EmptyView()
             } else if isBucketListed {
                 Pill(systemImage: "bookmark.fill", text: "Bucket list", tint: .bucket, background: .bucketSoft)
             } else {
@@ -528,8 +590,8 @@ struct CountryPanel: View {
                     .font(.caption)
                     .foregroundStyle(Color.inkSecondary)
             }
-            if !memories.isEmpty {
-                Text("\(memories.count) memor\(memories.count == 1 ? "y" : "ies")")
+            if stamp == nil || taste == nil, !memories.isEmpty {
+                Text(memories.count.counted("memory", "memories"))
                     .font(.caption)
                     .foregroundStyle(Color.inkSecondary)
             }

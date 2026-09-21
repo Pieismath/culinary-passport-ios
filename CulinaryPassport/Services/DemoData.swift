@@ -135,6 +135,53 @@ enum DemoData {
         db.seedStamp(Stamp(userId: priya, countryCode: "VN", firstVisited: DayFormat.string(from: ago(days: 3)),
                            lastVisited: DayFormat.string(from: ago(days: 3)), source: .memory, createdAt: ago(days: 2.4)))
 
+        // ── Meals: the weekly half of the passport ───────────────────────────
+        // (user, restaurant, dish, cuisine, city, photo, note, lat, lng, days ago)
+        let meals: [(UUID, String, String, String, String, String?, String?, Double, Double, Double)] = [
+            (me, "Supra", "Khachapuri", "GE", "San Francisco", "demo/khachapuri-1",
+             "Cheese boat, butter, egg. Stirred it all together like they said. No regrets.", 37.76, -122.42, 3),
+            (me, "Ramen Kiyo", "Tonkotsu ramen", "JP", "San Francisco", "demo/ramen-1", nil, 37.78, -122.41, 9),
+            (me, "Taqueria La Paloma", "Al pastor tacos", "MX", "San Francisco", "demo/tacos-1",
+             "Pineapple on the spit. Four tacos was one too many. Five next time.", 37.75, -122.42, 12),
+            (me, "Pho Hoa Lan", "Pho tai", "VN", "Oakland", "demo/pho-1", nil, 37.80, -122.27, 17),
+            (me, "Chalaca", "Ceviche mixto", "PE", "San Francisco", "demo/ceviche-1", nil, 37.79, -122.40, 24),
+            (me, "Seoul Garden", "Dolsot bibimbap", "KR", "San Francisco", "demo/bibimbap-1", nil, 37.78, -122.43, 31),
+            (me, "Dosa Mandir", "Masala dosa", "IN", "Berkeley", "demo/dosa-1", nil, 37.87, -122.27, 38),
+            (me, "Osteria Vela", "Cacio e pepe", "IT", "San Francisco", "demo/pasta-1", nil, 37.80, -122.41, 45),
+            (me, "Isan Street", "Khao soi", "TH", "Oakland", "demo/khaosoi-1", nil, 37.81, -122.26, 60),
+            (me, "Lalibela Kitchen", "Doro wat", "ET", "Oakland", "demo/injera-1",
+             "Ate with our hands, which is the right way to do it.", 37.83, -122.26, 75),
+            (maya, "Burmese Tea House", "Tea leaf salad", "MM", "Vancouver", "demo/teasalad-1",
+             "Crunchy, sour, a bit wild. Ordering it every time now.", 49.26, -123.11, 0.3),
+            (sam, "Kabul Kitchen", "Mantu", "AF", "London", "demo/mantu-1", nil, 51.52, -0.10, 1.6),
+            (hana, "Plov House", "Wedding plov", "UZ", "Seoul", "demo/plov-1",
+             "Carrots, lamb, the rice all shiny. A whole wedding in a bowl.", 37.55, 126.99, 3.2),
+            (leo, "Arepa Lab", "Reina pepiada", "VE", "São Paulo", "demo/arepa-1", nil, -23.56, -46.65, 6),
+            (priya, "Gaúcho Grill", "Picanha", "BR", "Bengaluru", "demo/churrasco-1", nil, 12.97, 77.59, 8),
+            (maya, "Lalibela Kitchen", "Injera platter", "ET", "Oakland", "demo/injera-2", nil, 37.83, -122.26, 11),
+        ]
+        for (user, restaurant, dish, code, city, photo, note, lat, lng, daysAgo) in meals {
+            let created = ago(days: daysAgo)
+            db.seedMemory(Memory(id: UUID(), userId: user, countryCode: code, title: "", city: city,
+                                 date: DayFormat.string(from: created), notes: note,
+                                 photos: photo.map { [$0] } ?? [], lat: lat, lng: lng,
+                                 visibility: .friends, createdAt: created, kind: .meal,
+                                 restaurantName: restaurant, dish: dish))
+        }
+        // Cuisines ticked on the checklist, no meals logged for them.
+        for code in ["CN", "FR", "US", "GR", "ES", "LB"] {
+            db.seedTaste(Taste(userId: me, countryCode: code, firstTasted: nil, lastTasted: nil,
+                               meals: 0, source: .manual, createdAt: ago(days: 400)))
+        }
+        for (user, codes) in [(maya, ["JP", "MX", "IT", "CN", "KR"]), (sam, ["IN", "GB", "ET", "JP"]),
+                              (hana, ["JP", "KR", "TW", "FR"]), (priya, ["IN", "TH", "LK", "SG"]),
+                              (leo, ["BR", "PT", "PE", "AR"])] {
+            for code in codes {
+                db.seedTaste(Taste(userId: user, countryCode: code, firstTasted: nil, lastTasted: nil,
+                                   meals: 0, source: .manual, createdAt: ago(days: 300)))
+            }
+        }
+
         // ── Reactions + comments ─────────────────────────────────────────────
         func react(_ user: UUID, _ memory: String?, _ emoji: String, hours: Double) {
             guard let memory, let id = memoryIds[memory] ?? friendMemory[memory] else { return }

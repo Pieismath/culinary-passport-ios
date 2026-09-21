@@ -26,6 +26,13 @@ struct GlobeStyle: Equatable {
         return selected ? highlight(base) : base
     }
 
+    /// Tasted but not visited: the same colour, a lighter wash — you know
+    /// the food, not the place (yet).
+    func tasted(_ tint: UIColor, selected: Bool) -> UIColor {
+        let base = tint.composited(alpha: isDark ? 0.36 : 0.3, over: land)
+        return selected ? highlight(base) : base
+    }
+
     func untouched(selected: Bool) -> UIColor {
         selected ? highlight(land) : land
     }

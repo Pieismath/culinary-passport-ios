@@ -7,7 +7,8 @@ import CoreLocation
 /// stamp and memory — as a stamp book, a timeline of trips, or a map.
 struct PassportView: View {
     enum Page: String, CaseIterable, Identifiable {
-        case stamps = "Stamps"
+        case stamps = "Visited"
+        case tastes = "Tasted"
         case trips = "Trips"
         case map = "Map"
         var id: String { rawValue }
@@ -21,7 +22,7 @@ struct PassportView: View {
         #if DEBUG
         let args = ProcessInfo.processInfo.arguments
         if let i = args.firstIndex(of: "-page"), i + 1 < args.count,
-           let page = Page(rawValue: args[i + 1].capitalized) {
+           let page = Page.allCases.first(where: { "\($0)" == args[i + 1].lowercased() }) {
             return page
         }
         #endif
@@ -38,6 +39,9 @@ struct PassportView: View {
     @State private var showChecklist = false
     @State private var addingMemory = false
     @State private var country: String?
+    @State private var cuisine: String?
+    @State private var tickingCuisines = false
+    @State private var loggingMeal = false
     @State private var trip: Trip?
     @State private var plan: TripPlan?
     @State private var planning = false
@@ -56,7 +60,8 @@ struct PassportView: View {
             ScrollView {
                 ScrollViewReader { scroll in
                     VStack(spacing: 16) {
-                        PassportCover(name: app.me?.name ?? "", countries: app.stats.countries)
+                        PassportCover(name: app.me?.name ?? "", countries: app.stats.countries,
+                                      cuisines: app.stats.cuisines)
                         dataPage
                         identityActions
                         goalCard
@@ -120,10 +125,17 @@ struct PassportView: View {
                 CountryMemoriesSheet(code: ref.code)
             }
             .sheet(item: $trip) { TripDetailSheet(trip: $0) }
+            .sheet(item: Binding(get: { cuisine.map(CountryRef.init) }, set: { cuisine = $0?.code })) { ref in
+                CuisineSheet(code: ref.code)
+            }
+            .sheet(isPresented: $tickingCuisines) {
+                NavigationStack { CuisineChecklistView(onDone: { tickingCuisines = false }) }
+            }
+            .sheet(isPresented: $loggingMeal) { MealEditorView(mode: .new(cuisine: nil, place: nil)) }
             .sheet(item: $plan) { TripPlanDetailSheet(plan: $0) }
             .sheet(isPresented: $planning) { TripPlanEditorSheet(mode: .new(countryCode: nil)) }
             .sheet(item: $editingPlace) { SavedPlaceEditorSheet(place: $0) }
-            .sheet(item: $loggingAt) { MemoryEditorView(mode: .atPlace($0)) }
+            .sheet(item: $loggingAt) { LogAtPlaceSheet(place: $0) }
             .sheet(item: $viewing) { MemoryDetailView(memory: $0) }
             .task(id: app.stats) { renderShareCard() }
         }
@@ -207,6 +219,17 @@ struct PassportView: View {
                 }
                 ProgressLine(fraction: stats.worldFraction)
                 continentBars(stats)
+                Divider().padding(.vertical, 2)
+                HStack(alignment: .firstTextBaseline) {
+                    Label("\(stats.cuisines) of \(Cuisine.codes.count) cuisines", systemImage: "fork.knife")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.ink)
+                    Spacer()
+                    Text(stats.meals.counted("meal"))
+                        .font(.caption)
+                        .foregroundStyle(Color.inkSecondary)
+                }
+                ProgressLine(fraction: stats.cuisineFraction, tint: .brand.opacity(0.8))
             }
         }
         .animation(.snappy, value: stats.countries)
@@ -315,6 +338,7 @@ struct PassportView: View {
     @ViewBuilder private var sectionContent: some View {
         switch page {
         case .stamps: stampBook
+        case .tastes: tasteBook
         case .trips: tripsList
         case .map: memoriesMap
         }
@@ -350,6 +374,47 @@ struct PassportView: View {
                     }
                 }
                 progressPage
+            }
+        }
+    }
+
+    /// The Tasted half: a cuisine per stamp, newest first, nine to a page.
+    @ViewBuilder private var tasteBook: some View {
+        if app.tastes.isEmpty {
+            EmptyStateView(systemImage: "fork.knife", title: "Nothing tasted yet",
+                           message: "Every country has a second stamp: its food. Tick the cuisines you've tried, or log tonight's dinner.",
+                           primaryTitle: "Cuisines I've tried", primaryAction: { tickingCuisines = true },
+                           secondaryTitle: "Log a meal", secondaryAction: { loggingMeal = true })
+                .padding(.vertical, 24)
+        } else {
+            let sorted = app.tastes.sorted {
+                ($0.lastTasted ?? "", $0.createdAt) > ($1.lastTasted ?? "", $1.createdAt)
+            }
+            let pages = stride(from: 0, to: sorted.count, by: 9).map { Array(sorted[$0..<min($0 + 9, sorted.count)]) }
+            LazyVStack(spacing: 14) {
+                ForEach(Array(pages.enumerated()), id: \.offset) { index, page in
+                    StampPage(number: stampPageCount + index + 2) {
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3),
+                                  spacing: 14) {
+                            ForEach(page) { taste in
+                                Button { cuisine = taste.countryCode } label: {
+                                    VStack(spacing: 4) {
+                                        StampBadge(code: taste.countryCode, subtitle: taste.yearsText,
+                                                   size: 96, tasted: true)
+                                        Text(taste.meals > 0 ? taste.meals.counted("meal") : " ")
+                                            .font(.caption2)
+                                            .foregroundStyle(Color.inkTertiary)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+                Button { tickingCuisines = true } label: {
+                    Label("Add cuisines I've tried", systemImage: "checklist")
+                }
+                .buttonStyle(SecondaryButtonStyle())
             }
         }
     }
@@ -674,7 +739,7 @@ struct CountryMemoriesSheet: View {
             }
             .sheet(isPresented: $planning) { TripPlanEditorSheet(mode: .new(countryCode: code)) }
             .sheet(item: $editingPlace) { SavedPlaceEditorSheet(place: $0) }
-            .sheet(item: $loggingAt) { MemoryEditorView(mode: .atPlace($0)) }
+            .sheet(item: $loggingAt) { LogAtPlaceSheet(place: $0) }
             .task { localIds = LocalPhotoIndex.assetIds(for: code) }
             .task(id: code) { await loadFriendPlaces() }
         }

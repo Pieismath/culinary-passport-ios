@@ -150,8 +150,11 @@ struct GroupChatView: View {
                     Button { sharingMemory = true } label: {
                         Label("Share a memory", systemImage: "photo.on.rectangle")
                     }
+                    Button { Task { await suggestDinner() } } label: {
+                        Label("What should we eat?", systemImage: "fork.knife")
+                    }
                     Button { Task { await suggestDestination() } } label: {
-                        Label("Where should we go?", systemImage: "dice")
+                        Label("Where should we go?", systemImage: "airplane")
                     }
                 } label: {
                     Image(systemName: "plus")
@@ -205,6 +208,20 @@ struct GroupChatView: View {
             composer = text
             replyTo = target
         }
+    }
+
+    /// A cuisine none of you has tasted — the weekly version of the trip dice.
+    private func suggestDinner() async {
+        let members = app.members(of: group.id)
+        let tasted = Set(((try? await app.backend.tastes(userIds: members)) ?? []).map(\.countryCode))
+        let pool = Cuisine.dicePool.filter { !tasted.contains($0) }
+        guard let pick = (pool.isEmpty ? Cuisine.dicePool : pool).randomElement() else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        let line = pool.isEmpty ? "we've all had it, but it's been a while"
+                                : "none of us has tried it yet"
+        await chat.send(text: "🎲 Dinner roll: \(Country.flag(for: pick)) \(Cuisine.name(for: pick)) — \(line)!",
+                        memoryId: nil, app: app)
+        app.backend.logEvent("dinner_rolled", props: ["cuisine": pick, "group": "true"])
     }
 
     /// A country none of you has stamped — let the globe pick the next trip.

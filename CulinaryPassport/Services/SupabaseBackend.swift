@@ -165,7 +165,7 @@ final class SupabaseBackend: Backend {
 
     func memory(id: UUID) async throws -> Memory? {
         let rows: [Memory] = try await client.from("entries").select()
-            .eq("kind", value: "memory").eq("id", value: id).limit(1).execute().value
+            .in("kind", values: ["memory", "meal"]).eq("id", value: id).limit(1).execute().value
         return rows.first
     }
 
@@ -173,7 +173,7 @@ final class SupabaseBackend: Backend {
         var result: [Memory] = []
         for chunk in chunks(Array(Set(ids))) {
             let rows: [Memory] = try await client.from("entries").select()
-                .eq("kind", value: "memory").in("id", values: chunk).execute().value
+                .in("kind", values: ["memory", "meal"]).in("id", values: chunk).execute().value
             result += rows
         }
         return result
@@ -308,6 +308,65 @@ final class SupabaseBackend: Backend {
             try await client.from("wishlist").delete()
                 .eq("country_code", value: code).eq("user_id", value: me).execute()
         }
+    }
+
+    // ── Meals + tastes ───────────────────────────────────────────────────────
+
+    func meals(userId: UUID) async throws -> [Memory] {
+        try await allPages { from, to in
+            try await client.from("entries").select()
+                .eq("kind", value: "meal")
+                .eq("user_id", value: userId)
+                .order("date_tried", ascending: false)
+                .order("created_at", ascending: false)
+                .order("id")
+                .range(from: from, to: to)
+                .execute().value
+        }
+    }
+
+    func meals(countryCode: String, userIds: [UUID]) async throws -> [Memory] {
+        guard !userIds.isEmpty else { return [] }
+        var result: [Memory] = []
+        for chunk in chunks(userIds) {
+            let rows: [Memory] = try await client.from("entries").select()
+                .eq("kind", value: "meal")
+                .eq("country_code", value: countryCode)
+                .in("user_id", values: chunk)
+                .order("date_tried", ascending: false)
+                .limit(60)
+                .execute().value
+            result += rows
+        }
+        return result.sorted { $0.date > $1.date }
+    }
+
+    func tastes(userIds: [UUID]) async throws -> [Taste] {
+        var result: [Taste] = []
+        for chunk in chunks(Array(Set(userIds))) {
+            let rows: [Taste] = try await allPages { from, to in
+                try await client.from("tastes").select()
+                    .in("user_id", values: chunk)
+                    .order("user_id").order("country_code")
+                    .range(from: from, to: to)
+                    .execute().value
+            }
+            result += rows
+        }
+        return result
+    }
+
+    func addTastes(_ codes: [String]) async throws {
+        guard !codes.isEmpty else { return }
+        struct Params: Encodable { let codes: [String] }
+        try await client.rpc("add_tastes", params: Params(codes: codes)).execute()
+    }
+
+    func removeTaste(countryCode: String) async throws {
+        try await client.from("tastes").delete()
+            .eq("user_id", value: uid())
+            .eq("country_code", value: countryCode)
+            .execute()
     }
 
     // ── Trips + saved places ─────────────────────────────────────────────────
@@ -448,7 +507,7 @@ final class SupabaseBackend: Backend {
     func discoverFeed(before: Date?, limit: Int) async throws -> [Memory] {
         let me = try await uid()
         var query = client.from("entries").select()
-            .eq("kind", value: "memory")
+            .in("kind", values: ["memory", "meal"])
             .eq("visibility", value: "public")
             .neq("user_id", value: me)
         if let before {

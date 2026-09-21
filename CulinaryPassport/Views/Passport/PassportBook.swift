@@ -11,6 +11,7 @@ import SwiftUI
 struct PassportCover: View {
     let name: String
     let countries: Int
+    var cuisines = 0
 
     var body: some View {
         VStack(spacing: 12) {
@@ -34,7 +35,9 @@ struct PassportCover: View {
                     .tracking(2)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
-                Text(countries.counted("COUNTRY", "COUNTRIES").uppercased())
+                Text(cuisines > 0
+                     ? "\(countries.counted("COUNTRY", "COUNTRIES").uppercased()) · \(cuisines.counted("CUISINE").uppercased())"
+                     : countries.counted("COUNTRY", "COUNTRIES").uppercased())
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .tracking(2)
                     .opacity(0.75)
@@ -55,7 +58,7 @@ struct PassportCover: View {
                 }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(name)'s passport, \(countries.counted("country", "countries"))")
+        .accessibilityLabel("\(name)'s passport, \(countries.counted("country", "countries")), \(cuisines.counted("cuisine")) tasted")
     }
 }
 
@@ -115,17 +118,18 @@ struct PassportDataPage<Photo: View>: View {
                     }
                     HStack(alignment: .top, spacing: 18) {
                         field("Countries", "\(stats.countries)")
+                        field("Cuisines", "\(stats.cuisines)")
                         field("World", stats.worldPercentText)
-                        field("Continents", "\(stats.continents)/7")
                     }
                 }
                 Spacer(minLength: 0)
             }
 
             HStack(spacing: 18) {
+                field("Continents", "\(stats.continents)/7")
+                field("Meals", "\(stats.meals)")
                 field("Cities", "\(stats.cities)")
                 field("Memories", "\(memories)")
-                field("Territories", stats.territories > 0 ? "+\(stats.territories)" : "—")
                 Spacer(minLength: 0)
             }
 
@@ -207,7 +211,7 @@ struct MachineReadableStrip: View {
         let surname = parts.count > 1 ? parts.last! : (parts.first ?? "TRAVELLER")
         let given = parts.count > 1 ? parts.dropLast().joined(separator: "<") : ""
         let first = "P<\(code)\(surname)<<\(given)"
-        let second = "\(number(for: profile?.id))\(code)\(pad(stats.countries, 3))\(pad(stats.continents, 2))"
+        let second = "\(number(for: profile?.id))\(code)\(pad(stats.countries, 3))\(pad(stats.continents, 2))<\(pad(stats.cuisines, 3))"
         return [fill(first, to: width), fill(second, to: width)]
     }
 
@@ -255,7 +259,7 @@ struct PassportShareCard: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                     .padding(.top, 2)
-                Text("\(stats.countries.counted("COUNTRY", "COUNTRIES").uppercased()) · \(stats.worldPercentText) OF THE WORLD")
+                Text("\(stats.countries.counted("COUNTRY", "COUNTRIES").uppercased()) · \(stats.cuisines.counted("CUISINE").uppercased())")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .tracking(1.4)
                     .opacity(0.8)

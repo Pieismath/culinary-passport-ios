@@ -534,14 +534,16 @@ struct SavingOverlay: View {
 /// Apple Maps place search.
 struct PlaceSearchSheet: View {
     let onPick: (PlaceResult) -> Void
+    var foodOnly = false
 
     @Environment(\.dismiss) private var dismiss
     @State private var search: PlaceSearch
     @State private var resolving = false
 
-    init(near: CLLocationCoordinate2D?, onPick: @escaping (PlaceResult) -> Void) {
+    init(near: CLLocationCoordinate2D?, foodOnly: Bool = false, onPick: @escaping (PlaceResult) -> Void) {
         self.onPick = onPick
-        _search = State(initialValue: PlaceSearch(near: near))
+        self.foodOnly = foodOnly
+        _search = State(initialValue: PlaceSearch(near: near, foodOnly: foodOnly))
     }
 
     var body: some View {
@@ -576,13 +578,16 @@ struct PlaceSearchSheet: View {
             .overlay {
                 if resolving { ProgressView() }
                 else if search.query.trimmed.isEmpty {
-                    ContentUnavailableView("Search places", systemImage: "mappin.and.ellipse",
-                                           description: Text("Landmarks, restaurants, hotels, towns…"))
+                    ContentUnavailableView(foodOnly ? "Find the restaurant" : "Search places",
+                                           systemImage: foodOnly ? "fork.knife" : "mappin.and.ellipse",
+                                           description: Text(foodOnly
+                                                             ? "Restaurants, cafés, bakeries and markets nearby."
+                                                             : "Landmarks, restaurants, hotels, towns…"))
                 }
             }
             .searchable(text: $search.query, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: "Where was this?")
-            .navigationTitle("Place")
+                        prompt: foodOnly ? "Where did you eat?" : "Where was this?")
+            .navigationTitle(foodOnly ? "Restaurant" : "Place")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }

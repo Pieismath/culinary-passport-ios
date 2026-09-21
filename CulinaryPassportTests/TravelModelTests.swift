@@ -365,6 +365,66 @@ final class TravelModelTests: XCTestCase {
         XCTAssertTrue(MachineReadableStrip.lines(profile: nil, stats: TravelStats())[0].hasPrefix("P<XXTRAVELLER"))
     }
 
+    // ── Food ─────────────────────────────────────────────────────────────────
+
+    func testCuisinesAreNamedTheWayPeopleOrderThem() {
+        XCTAssertEqual(Cuisine.name(for: "GE"), "Georgian")
+        XCTAssertEqual(Cuisine.name(for: "KR"), "Korean")
+        XCTAssertEqual(Cuisine.name(for: "IR"), "Persian")
+        XCTAssertEqual(Cuisine.name(for: "HK"), "Hong Kong")
+        XCTAssertEqual(Cuisine.withArticle("ET"), "an Ethiopian")
+        XCTAssertEqual(Cuisine.withArticle("GE"), "a Georgian")
+        XCTAssertEqual(Cuisine.withArticle("UA"), "a Ukrainian")
+        XCTAssertEqual(Cuisine.withArticle("UZ"), "an Uzbek")
+        XCTAssertFalse(Cuisine.isCuisine("AQ"), "Antarctica is travel-only")
+        XCTAssertTrue(Cuisine.isCuisine("PR"), "territories with a food of their own count")
+        XCTAssertGreaterThan(Cuisine.codes.count, 197)
+    }
+
+    func testRestaurantNamesGiveTheirCuisineAway() {
+        XCTAssertEqual(Cuisine.suggest(from: "Pho Saigon"), "VN")
+        XCTAssertEqual(Cuisine.suggest(from: "Taqueria El Farolito"), "MX")
+        XCTAssertEqual(Cuisine.suggest(from: "Tbilisi Café"), "GE")
+        XCTAssertEqual(Cuisine.suggest(from: "Seoul Korean BBQ House"), "KR", "the longer cue beats plain bbq")
+        XCTAssertEqual(Cuisine.suggest(from: "Joe's Diner"), "US")
+        XCTAssertEqual(Cuisine.suggest(from: "Crêperie Saint-Germain"), "FR", "accents don't hide a cue")
+        XCTAssertNil(Cuisine.suggest(from: "The Blue Door"))
+    }
+
+    func testSearchingADishFindsItsCuisine() {
+        XCTAssertTrue(Cuisine.matches("VN", "pho"))
+        XCTAssertTrue(Cuisine.matches("VE", "arepa"))
+        XCTAssertTrue(Cuisine.matches("CO", "arepa"))
+        XCTAssertTrue(Cuisine.matches("GE", "georg"))
+        XCTAssertFalse(Cuisine.matches("JP", "pho"))
+    }
+
+    func testDinnerDiceRollsSomethingNobodyAtTheTableHasHad() {
+        let pool = Cuisine.dinnerPool(tastedByTable: ["JP", "MX", "IT"], tastedByMe: ["JP"])
+        XCTAssertFalse(pool.contains("JP") || pool.contains("MX") || pool.contains("IT"))
+        XCTAssertTrue(pool.allSatisfy { Cuisine.dicePool.contains($0) })
+        // The table has had everything popular: fall back to what I haven't.
+        let everything = Set(Cuisine.dicePool)
+        let mine = Cuisine.dinnerPool(tastedByTable: everything, tastedByMe: ["JP"])
+        XCTAssertFalse(mine.contains("JP"))
+        XCTAssertFalse(Cuisine.dinnerPool(tastedByTable: everything, tastedByMe: everything).isEmpty)
+    }
+
+    func testMealRowsDecodeFromTheCulinaryColumns() throws {
+        let json = #"""
+        {"id":"8E0B8C35-2A68-4E2B-9D0A-6B7E53F2C9A1","user_id":"0D3E0000-0000-4000-8000-000000000001",
+         "kind":"meal","country_code":"GE","title":"","restaurant_name":"Supra","signature_dish":"Khachapuri",
+         "city":"San Francisco","date_tried":"2026-09-18","notes":null,"photos":[],"lat":37.76,"lng":-122.42,
+         "visibility":"groups","rating":5,"created_at":"2026-09-18T19:04:11.123456+00:00"}
+        """#
+        let meal = try SupabaseBackend.decoder.decode(Memory.self, from: Data(json.utf8))
+        XCTAssertTrue(meal.isMeal)
+        XCTAssertEqual(meal.restaurantName, "Supra")
+        XCTAssertEqual(meal.dish, "Khachapuri")
+        XCTAssertEqual(meal.displayTitle, "Khachapuri")
+        XCTAssertEqual(meal.feedLine, "🇬🇪 Georgian at Supra")
+    }
+
     func testUsernames() {
         XCTAssertEqual(Handles.normalizedUsername("  @Jason.F "), "jason.f")
         XCTAssertTrue(Handles.isValidUsername("alex.rivera"))
@@ -598,7 +658,9 @@ final class AppModelTests: XCTestCase {
         let theirs = try XCTUnwrap(app.backend as? DemoBackend)
         let feed = try await theirs.friendsFeed(before: nil, limit: 5)
         // Not one the demo passport already saved.
-        let memory = try XCTUnwrap(feed.first { $0.userId != app.myId && app.savedPlace(from: $0) == nil })
+        let memory = try XCTUnwrap(feed.first {
+            !$0.isMeal && $0.userId != app.myId && app.savedPlace(from: $0) == nil
+        })
 
         XCTAssertNil(app.savedPlace(from: memory))
         await app.toggleSavedPlace(from: memory)
@@ -642,6 +704,64 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(app.memories.count, memoriesBefore)
         XCTAssertFalse(app.tripPlans.contains { summary.tripIds.contains($0.id) })
         XCTAssertNil(app.lastImport)
+    }
+
+    func testAMealTastesItsCuisineAndNeverStampsAVisit() async throws {
+        let app = await signedInModel()
+        XCTAssertFalse(app.tastedCodes.contains("GE") && app.visitedCodes.contains("GE"))
+        let cuisinesBefore = app.stats.cuisines
+        let visitedBefore = app.visitedCodes
+
+        var draft = MemoryDraft()
+        draft.kind = .meal
+        draft.countryCode = "UZ"
+        draft.restaurantName = "Plov Center"
+        draft.dish = "Plov"
+        let first = try await app.saveMemory(draft, editing: nil, newPhotos: [], shareTo: [])
+        XCTAssertTrue(first.isNewCountry, "a first taste plays the stamp moment")
+        XCTAssertEqual(first.countryNumber, cuisinesBefore + 1, "numbered among cuisines")
+        await app.refreshTastes()
+        XCTAssertTrue(app.tastedCodes.contains("UZ"))
+        XCTAssertEqual(app.tastesByCode["UZ"]?.meals, 1)
+        XCTAssertEqual(app.visitedCodes, visitedBefore, "eating Uzbek food isn't visiting Uzbekistan")
+        XCTAssertEqual(app.mealsByCountry["UZ"]?.count, 1)
+        XCTAssertNil(app.memoriesByCountry["UZ"], "meals don't mix into travel memories")
+
+        draft.dish = "Samsa"
+        let second = try await app.saveMemory(draft, editing: nil, newPhotos: [], shareTo: [])
+        XCTAssertFalse(second.isNewCountry)
+
+        // A cuisine with meals can't be un-tasted; deleting them all does it.
+        do {
+            try await app.removeTaste("UZ")
+            XCTFail("meals keep the taste")
+        } catch {}
+        try await app.deleteMemory(first.memory)
+        try await app.deleteMemory(second.memory)
+        XCTAssertFalse(app.tastedCodes.contains("UZ"))
+    }
+
+    func testTickingCuisinesOnTheChecklist() async throws {
+        let app = await signedInModel()
+        try await app.addTastes(["NP", "SN"])
+        XCTAssertTrue(app.tastedCodes.isSuperset(of: ["NP", "SN"]))
+        XCTAssertEqual(app.tastesByCode["NP"]?.source, .manual)
+        XCTAssertEqual(app.tastesByCode["NP"]?.meals, 0)
+        try await app.removeTaste("NP")
+        XCTAssertFalse(app.tastedCodes.contains("NP"))
+    }
+
+    func testSavingAFriendsMealKeepsTheRestaurantWhereItIs() async throws {
+        let app = await signedInModel()
+        let demo = try XCTUnwrap(app.backend as? DemoBackend)
+        let feed = try await demo.friendsFeed(before: nil, limit: 30)
+        let meal = try XCTUnwrap(feed.first { $0.isMeal && $0.countryCode == "MM" })   // Maya's Burmese
+        await app.toggleSavedPlace(from: meal)
+        let saved = try XCTUnwrap(app.savedPlace(from: meal))
+        XCTAssertEqual(saved.title, "Burmese Tea House")
+        XCTAssertEqual(saved.cuisineCode, "MM")
+        XCTAssertEqual(saved.countryCode, "CA", "the place is in Vancouver, not Myanmar")
+        XCTAssertEqual(app.restaurantsByCuisine["MM"]?.map(\.id), [saved.id])
     }
 
     func testDeepLinks() async {

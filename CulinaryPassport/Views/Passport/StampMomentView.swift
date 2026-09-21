@@ -7,6 +7,8 @@ struct StampMomentView: View {
     let codes: [String]
     var number: Int?
     var date: String?
+    /// A first taste of a cuisine rather than a first visit.
+    var tasted = false
     let onClose: () -> Void
 
     @State private var stamped = false
@@ -38,13 +40,16 @@ struct StampMomentView: View {
 
     private func singleStamp(_ code: String) -> some View {
         VStack(spacing: 22) {
-            PostageStamp(code: code, number: number, date: date.map(DayFormat.pretty) ?? "", width: 240)
+            PostageStamp(code: code, number: number, date: date.map(DayFormat.pretty) ?? "", width: 240,
+                         tasted: tasted)
                 .scaleEffect(stamped ? 1 : 2.4)
                 .rotationEffect(.degrees(stamped ? -3 : -22))
                 .opacity(stamped ? 1 : 0)
             VStack(spacing: 6) {
-                Eyebrow(text: number.map { "Country Nº \($0)" } ?? "New stamp", color: .brand)
-                Text("Welcome to \(CountryStore.byCode[code]?.name ?? code)")
+                Eyebrow(text: number.map { tasted ? "Cuisine Nº \($0)" : "Country Nº \($0)" } ?? "New stamp",
+                        color: .brand)
+                Text(tasted ? "Your first \(Cuisine.name(for: code)) meal"
+                            : "Welcome to \(CountryStore.byCode[code]?.name ?? code)")
                     .font(.display)
                     .foregroundStyle(Color.ink)
                     .multilineTextAlignment(.center)
@@ -58,14 +63,14 @@ struct StampMomentView: View {
         VStack(spacing: 22) {
             VStack(spacing: 6) {
                 Eyebrow(text: "Passport updated", color: .brand)
-                Text("\(codes.count) new stamps")
+                Text(tasted ? codes.count.counted("cuisine") + " tasted" : "\(codes.count) new stamps")
                     .font(.displayLarge)
                     .foregroundStyle(Color.ink)
                     .contentTransition(.numericText())
             }
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 10) {
                 ForEach(Array(codes.prefix(12).enumerated()), id: \.element) { index, code in
-                    StampBadge(code: code, size: 96)
+                    StampBadge(code: code, size: 96, tasted: tasted)
                         .scaleEffect(index < revealed ? 1 : 1.9)
                         .opacity(index < revealed ? 1 : 0)
                 }
@@ -123,7 +128,7 @@ struct StampMomentView: View {
                     Text("\(codes.count) new stamps")
                         .font(.system(size: 34, weight: .semibold, design: .serif))
                     LazyVGrid(columns: Array(repeating: GridItem(.fixed(104)), count: 3), spacing: 12) {
-                        ForEach(codes.prefix(9), id: \.self) { StampBadge(code: $0, size: 100) }
+                        ForEach(codes.prefix(9), id: \.self) { StampBadge(code: $0, size: 100, tasted: tasted) }
                     }
                 }
             }
