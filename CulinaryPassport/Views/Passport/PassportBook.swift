@@ -1,17 +1,18 @@
 import SwiftUI
 
-// The passport as a booklet rather than a stack of cards: a gold-blocked
-// cover, a data page with the traveller's details and a machine-readable
-// strip, and stamp pages with a stitched spine and page numbers.
+// The food passport as a booklet rather than a stack of cards: a
+// gold-blocked cover, a data page with the eater's details and a
+// machine-readable strip, and stamp pages with a stitched spine and page
+// numbers — one inked stamp per cuisine tasted.
 //
-// Everything here is decoration over real data — the numbers are the same
-// ones the stats card showed, just set the way a passport would set them.
+// Everything here is decoration over real data, set the way a passport
+// would set it.
 
-/// The cover: dark board, gold leaf, the traveller's name blocked into it.
+/// The cover: dark board, gold leaf, the eater's name blocked into it.
 struct PassportCover: View {
     let name: String
-    let countries: Int
-    var cuisines = 0
+    let cuisines: Int
+    var percent = "0%"
 
     var body: some View {
         VStack(spacing: 12) {
@@ -20,24 +21,30 @@ struct PassportCover: View {
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .tracking(3)
                 Spacer()
-                Text("WORLD PASSPORT")
+                Text("CULINARY PASSPORT")
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .tracking(1.5)
             }
 
-            Image(systemName: "globe.europe.africa")
-                .font(.system(size: 34, weight: .light))
-                .padding(.top, 2)
+            // The emblem: the world between a fork and a knife.
+            HStack(spacing: 10) {
+                Image(systemName: "fork.knife")
+                    .font(.system(size: 18, weight: .light))
+                Image(systemName: "globe.europe.africa")
+                    .font(.system(size: 34, weight: .light))
+                Image(systemName: "fork.knife")
+                    .font(.system(size: 18, weight: .light))
+                    .scaleEffect(x: -1)
+            }
+            .padding(.top, 2)
 
             VStack(spacing: 3) {
-                Text(name.isEmpty ? "TRAVELLER" : name.uppercased())
+                Text(name.isEmpty ? "HUNGRY" : name.uppercased())
                     .font(.system(size: 17, weight: .semibold, design: .serif))
                     .tracking(2)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
-                Text(cuisines > 0
-                     ? "\(countries.counted("COUNTRY", "COUNTRIES").uppercased()) · \(cuisines.counted("CUISINE").uppercased())"
-                     : countries.counted("COUNTRY", "COUNTRIES").uppercased())
+                Text("\(cuisines.counted("CUISINE").uppercased()) · \(percent) OF THE WORLD")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .tracking(2)
                     .opacity(0.75)
@@ -58,12 +65,12 @@ struct PassportCover: View {
                 }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(name)'s passport, \(countries.counted("country", "countries")), \(cuisines.counted("cuisine")) tasted")
+        .accessibilityLabel("\(name)'s food passport, \(cuisines.counted("cuisine")) tasted, \(percent) of the world")
     }
 }
 
 /// The passport photo: squared off, not a circle, because that's what a data
-/// page mounts. Falls back to the traveller's colour and initial.
+/// page mounts. Falls back to the eater's colour and initial.
 struct PassportPhoto: View {
     let profile: Profile?
     var width: CGFloat = 84
@@ -88,8 +95,7 @@ struct PassportPhoto: View {
 /// machine-readable lines along the bottom.
 struct PassportDataPage<Photo: View>: View {
     let profile: Profile?
-    let stats: TravelStats
-    let memories: Int
+    let stats: FoodStats
     @ViewBuilder var photo: () -> Photo
 
     private var homeCountry: Country? { profile?.homeCountry.flatMap { CountryStore.byCode[$0] } }
@@ -111,25 +117,24 @@ struct PassportDataPage<Photo: View>: View {
                     }
 
                 VStack(alignment: .leading, spacing: 11) {
-                    field("Traveller", profile?.name ?? "—", wide: true)
+                    field("Eater", profile?.name ?? "—", wide: true)
                     HStack(alignment: .top, spacing: 18) {
-                        field("Nationality", homeCountry.map { "\($0.flag) \($0.name)" } ?? "—")
+                        field("Home kitchen", homeCountry.map { "\($0.flag) \($0.name)" } ?? "—")
                         field("Since", memberSince)
                     }
                     HStack(alignment: .top, spacing: 18) {
-                        field("Countries", "\(stats.countries)")
                         field("Cuisines", "\(stats.cuisines)")
                         field("World", stats.worldPercentText)
+                        field("Continents", "\(stats.continents)/6")
                     }
                 }
                 Spacer(minLength: 0)
             }
 
             HStack(spacing: 18) {
-                field("Continents", "\(stats.continents)/7")
                 field("Meals", "\(stats.meals)")
-                field("Cities", "\(stats.cities)")
-                field("Memories", "\(memories)")
+                field("Restaurants", "\(stats.restaurants)")
+                field("Favourite", stats.favorite.map { "\(Country.flag(for: $0)) \(Cuisine.name(for: $0))" } ?? "—")
                 Spacer(minLength: 0)
             }
 
@@ -182,7 +187,7 @@ struct PassportDataPage<Photo: View>: View {
 /// only from what's already on the page.
 struct MachineReadableStrip: View {
     let profile: Profile?
-    let stats: TravelStats
+    let stats: FoodStats
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -202,16 +207,18 @@ struct MachineReadableStrip: View {
         .accessibilityHidden(true)
     }
 
-    static func lines(profile: Profile?, stats: TravelStats, width: Int = 40) -> [String] {
+    /// "PC" is a passport (P) of type C, for culinary. The second line is
+    /// the number, the home kitchen, cuisines, continents and meals.
+    static func lines(profile: Profile?, stats: FoodStats, width: Int = 40) -> [String] {
         let code = (profile?.homeCountry ?? "XX").uppercased()
-        let parts = (profile?.name ?? "TRAVELLER").uppercased()
+        let parts = (profile?.name ?? "HUNGRY").uppercased()
             .components(separatedBy: " ")
             .map { $0.filter { $0.isLetter } }
             .filter { !$0.isEmpty }
-        let surname = parts.count > 1 ? parts.last! : (parts.first ?? "TRAVELLER")
+        let surname = parts.count > 1 ? parts.last! : (parts.first ?? "HUNGRY")
         let given = parts.count > 1 ? parts.dropLast().joined(separator: "<") : ""
-        let first = "P<\(code)\(surname)<<\(given)"
-        let second = "\(number(for: profile?.id))\(code)\(pad(stats.countries, 3))\(pad(stats.continents, 2))<\(pad(stats.cuisines, 3))"
+        let first = "PC\(code)\(surname)<<\(given)"
+        let second = "\(number(for: profile?.id))\(code)\(pad(stats.cuisines, 3))\(pad(stats.continents, 1))<\(pad(stats.meals, 4))"
         return [fill(first, to: width), fill(second, to: width)]
     }
 
@@ -235,11 +242,11 @@ struct MachineReadableStrip: View {
 }
 
 /// What gets posted elsewhere: the cover, blocked in gold, over a page of
-/// stamps. Rendered by ImageRenderer, so every colour here is explicit.
+/// cuisine stamps. Rendered by ImageRenderer, so every colour here is explicit.
 struct PassportShareCard: View {
     let profile: Profile?
-    let stats: TravelStats
-    let stamps: [Stamp]
+    let stats: FoodStats
+    let tastes: [Taste]
 
     var body: some View {
         VStack(spacing: 18) {
@@ -249,17 +256,17 @@ struct PassportShareCard: View {
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .tracking(3)
                     Spacer()
-                    Text("WORLD PASSPORT")
+                    Text("CULINARY PASSPORT")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .tracking(1.4)
                 }
-                Text((profile?.name ?? "Traveller").uppercased())
+                Text((profile?.name ?? "Hungry").uppercased())
                     .font(.system(size: 21, weight: .semibold, design: .serif))
                     .tracking(2)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                     .padding(.top, 2)
-                Text("\(stats.countries.counted("COUNTRY", "COUNTRIES").uppercased()) · \(stats.cuisines.counted("CUISINE").uppercased())")
+                Text("\(stats.cuisines.counted("CUISINE").uppercased()) · \(stats.worldPercentText) OF THE WORLD")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .tracking(1.4)
                     .opacity(0.8)
@@ -279,8 +286,8 @@ struct PassportShareCard: View {
             }
 
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(96), spacing: 4), count: 3), spacing: 8) {
-                ForEach(stamps.prefix(9)) { stamp in
-                    StampBadge(code: stamp.countryCode, subtitle: stamp.yearsText, size: 92)
+                ForEach(tastes.prefix(9)) { taste in
+                    StampBadge(code: taste.countryCode, subtitle: taste.yearsText, size: 92, tasted: true)
                 }
             }
         }

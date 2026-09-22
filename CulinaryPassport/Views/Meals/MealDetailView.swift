@@ -1,13 +1,14 @@
 import SwiftUI
 
-/// One memory in full: photos, the story, reactions and comments. Yours get
-/// Edit / Share / Delete; other people's get Report / Block.
-struct MemoryDetailView: View {
-    let memory: Memory
+/// One meal in full: photos, where, what, reactions and comments. Yours get
+/// Edit / Share / Delete; other people's get Save the restaurant, Report,
+/// Block.
+struct MealDetailView: View {
+    let meal: Meal
 
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
-    @State private var current: Memory
+    @State private var current: Meal
     @State private var reactions: [Reaction] = []
     @State private var editing = false
     @State private var confirmDelete = false
@@ -15,11 +16,10 @@ struct MemoryDetailView: View {
     @State private var reporting = false
     @State private var confirmBlock = false
     @State private var shareImage: UIImage?
-    @State private var attaching = false
 
-    init(memory: Memory) {
-        self.memory = memory
-        _current = State(initialValue: memory)
+    init(meal: Meal) {
+        self.meal = meal
+        _current = State(initialValue: meal)
     }
 
     private var isMine: Bool { current.userId == app.myId }
@@ -29,30 +29,16 @@ struct MemoryDetailView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    PhotoPager(memory: current, aspect: 4.0 / 5.0, cornerRadius: 22, maxPixel: 1800)
-
-                    if isMine, current.photos.isEmpty {
-                        let local = LocalMemoryPhotos.assetIds(for: current)
-                        if !local.isEmpty {
-                            HStack(spacing: 10) {
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text("\(local.count.counted("photo")) from this day on your phone")
-                                        .font(.subheadline.weight(.medium))
-                                        .foregroundStyle(Color.ink)
-                                    Text("Only you can see them until you add them.")
-                                        .font(.caption)
-                                        .foregroundStyle(Color.inkSecondary)
-                                }
-                                Spacer(minLength: 4)
-                                Button(attaching ? "Adding…" : "Add") {
-                                    Task { await attach(Array(local.prefix(6))) }
-                                }
-                                .buttonStyle(SecondaryButtonStyle(fullWidth: false))
-                                .disabled(attaching)
-                            }
-                            .card(padding: 12)
-                        }
-                    }
+                    // A print on the table, not a card: white border, a
+                    // deeper bottom edge, set down a little crooked.
+                    PhotoPager(meal: current, aspect: 4.0 / 5.0, cornerRadius: 4, maxPixel: 1800)
+                        .padding(10)
+                        .padding(.bottom, 24)
+                        .background(Color.card, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .shadow(color: .black.opacity(0.16), radius: 14, y: 8)
+                        .rotationEffect(.degrees(-1.2))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text(current.displayTitle)
@@ -68,7 +54,7 @@ struct MemoryDetailView: View {
                         if isMine {
                             Pill(systemImage: current.visibility.systemImage, text: current.visibility.label)
                         } else {
-                            SavePlaceButton(memory: current, showsLabel: true)
+                            SavePlaceButton(meal: current, showsLabel: true)
                                 .padding(.top, 2)
                         }
                     }
@@ -80,7 +66,7 @@ struct MemoryDetailView: View {
                             HStack(spacing: 10) {
                                 AvatarView(profile: author, size: 40)
                                 VStack(alignment: .leading, spacing: 1) {
-                                    Text(author?.name ?? "Traveller").font(.headline).foregroundStyle(Color.ink)
+                                    Text(author?.name ?? "Someone").font(.headline).foregroundStyle(Color.ink)
                                     if let handle = author?.handle {
                                         Text(handle).font(.caption).foregroundStyle(Color.inkSecondary)
                                     }
@@ -96,7 +82,7 @@ struct MemoryDetailView: View {
                     }
 
                     if let notes = current.notes, !notes.isEmpty {
-                        PostcardNote(text: notes, code: current.countryCode, tasted: current.isMeal,
+                        PostcardNote(text: notes, code: current.countryCode, tasted: true,
                                      stampSubtitle: String(current.date.prefix(4)))
                     }
 
@@ -107,7 +93,7 @@ struct MemoryDetailView: View {
 
                     Divider()
 
-                    CommentsSection(memory: current)
+                    CommentsSection(meal: current)
                 }
                 .padding(Metrics.gutter)
                 .padding(.bottom, 24)
@@ -120,22 +106,16 @@ struct MemoryDetailView: View {
                 }
                 ToolbarItem(placement: .primaryAction) { menu }
             }
-            .sheet(isPresented: $editing) {
-                if current.isMeal {
-                    MealEditorView(mode: .edit(current))
-                } else {
-                    MemoryEditorView(mode: .edit(current))
-                }
-            }
+            .sheet(isPresented: $editing) { MealEditorView(mode: .edit(current)) }
             .sheet(isPresented: $reporting) {
-                ReportSheet(title: "Report memory") { reason in
+                ReportSheet(title: "Report meal") { reason in
                     Task { await app.report("entry", id: current.id, reason: reason) }
                 }
             }
-            .confirmationDialog("Delete this memory?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            .confirmationDialog("Delete this meal?", isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) { Task { await delete() } }
             } message: {
-                Text("Its photos are deleted too. The country stays stamped unless this was your only memory there.")
+                Text("Its photos are deleted too. The cuisine stays stamped unless this was your only meal of it.")
             }
             .confirmationDialog("Block \(author?.name ?? "this person")?", isPresented: $confirmBlock,
                                 titleVisibility: .visible) {
@@ -151,7 +131,7 @@ struct MemoryDetailView: View {
             .overlay { if deleting { SavingOverlay(text: "Deleting…") } }
             .task { await load() }
             .task(id: current) { if isMine { await renderPostcard() } }
-            .onChange(of: app.memories) { _, mine in
+            .onChange(of: app.meals) { _, mine in
                 // Pick up edits made from the editor sheet.
                 if let fresh = mine.first(where: { $0.id == current.id }) { current = fresh }
             }
@@ -183,7 +163,7 @@ struct MemoryDetailView: View {
 
     private func load() async {
         _ = await app.profiles(for: [current.userId])
-        reactions = (try? await app.backend.reactions(memoryIds: [current.id])) ?? []
+        reactions = (try? await app.backend.reactions(mealIds: [current.id])) ?? []
         _ = await app.profiles(for: reactions.map(\.userId))
     }
 
@@ -193,31 +173,9 @@ struct MemoryDetailView: View {
         reactions.removeAll { $0.userId == me && $0.emoji == emoji }
         if on { reactions.append(Reaction(entryId: current.id, userId: me, emoji: emoji, createdAt: Date())) }
         do {
-            try await app.backend.setReaction(memoryId: current.id, emoji: emoji, on: on)
+            try await app.backend.setReaction(mealId: current.id, emoji: emoji, on: on)
         } catch {
             reactions = before
-            app.show(error)
-        }
-    }
-
-    /// Upload the day's photos from this phone onto the memory.
-    private func attach(_ ids: [String]) async {
-        attaching = true
-        defer { attaching = false }
-        var jpegs: [Data] = []
-        for id in ids {
-            guard let (data, _) = await LocalAssets.imageData(id),
-                  let upload = ImageTools.uploadJPEG(from: data) else { continue }
-            jpegs.append(upload.jpeg)
-        }
-        guard !jpegs.isEmpty else {
-            app.show(AppError("Couldn't read those photos."))
-            return
-        }
-        do {
-            try await app.attachPhotos(jpegs, to: current)
-            app.celebrate(jpegs.count.counted("photo") + " added")
-        } catch {
             app.show(error)
         }
     }
@@ -226,8 +184,8 @@ struct MemoryDetailView: View {
         deleting = true
         defer { deleting = false }
         do {
-            try await app.deleteMemory(current)
-            app.celebrate("Memory deleted")
+            try await app.deleteMeal(current)
+            app.celebrate("Meal deleted")
             dismiss()
         } catch {
             app.show(error)
@@ -260,7 +218,7 @@ struct MemoryDetailView: View {
                             .foregroundStyle(Color(red: 0.42, green: 0.38, blue: 0.33))
                     }
                     Spacer()
-                    StampBadge(code: current.countryCode, subtitle: String(current.date.prefix(4)), size: 76)
+                    StampBadge(code: current.countryCode, subtitle: String(current.date.prefix(4)), size: 76, tasted: true)
                 }
             }
         }

@@ -7,7 +7,7 @@ struct StampBadge: View {
     let code: String
     var subtitle: String?
     var size: CGFloat = 104
-    /// Ghost stamps (not yet visited) render faint and dashed.
+    /// Ghost stamps (not tasted yet) render faint and dashed.
     var inked = true
     /// The Tasted stamp: the cuisine's name ("GEORGIAN") and a fork and
     /// knife where a visa stamp would have its border crossing.

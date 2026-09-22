@@ -11,7 +11,7 @@ enum Cuisine {
     }
 
     /// Every place you can taste: sovereign countries, plus territories with
-    /// a food of their own. Antarctica and the like are travel-only.
+    /// a food of their own. Antarctica and the like have no kitchen.
     static let codes: [String] = CountryStore.all
         .filter { $0.isSovereign || names[$0.code] != nil }
         .map(\.code)

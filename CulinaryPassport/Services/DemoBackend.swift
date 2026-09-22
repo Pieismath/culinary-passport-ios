@@ -1,7 +1,7 @@
 import Foundation
 import UIKit
 
-/// In-memory backend with a believable cast, for `-uiPreview`, screenshots
+/// In-memory backend with a believable cast of eaters, for `-uiPreview`, screenshots
 /// and tests. Mirrors the server's visibility rules closely enough that
 /// screens behave the way they will against Supabase. Nothing leaves the device.
 final class DemoBackend: Backend {
@@ -9,12 +9,8 @@ final class DemoBackend: Backend {
 
     private let lock = NSLock()
     private var profilesById: [UUID: Profile] = [:]
-    private var memoriesById: [UUID: Memory] = [:]
-    private var stampsByKey: [String: Stamp] = [:]
+    private var mealsById: [UUID: Meal] = [:]
     private var tastesByKey: [String: Taste] = [:]
-    /// Dates given directly (import/checklist), like stamps.stamped_first/last.
-    private var stampedDates: [String: (first: String?, last: String?)] = [:]
-    private var bucket: Set<String> = []
     private var follows: Set<[UUID]> = []            // [follower, followee]
     private var blocked: Set<UUID> = []
     private var reactions: [Reaction] = []
@@ -24,13 +20,12 @@ final class DemoBackend: Backend {
     private var posts: [GroupPost] = []
     private var postReactions: [PostReaction] = []
     private var postComments: [PostComment] = []
-    private var plans: [TripPlan] = []
     private var places: [SavedPlace] = []
     private var uploaded: [String: Data] = [:]
     /// Simulated round trip, so loading states are exercised.
     var latency: Duration = .milliseconds(120)
 
-    /// Tests: make the next memory write fail before it lands, or land and
+    /// Tests: make the next meal write fail before it lands, or land and
     /// then lose its response (a timeout on bad Wi-Fi).
     enum WriteFault { case beforeWrite, responseLost }
     var nextWriteFault: WriteFault?
@@ -56,10 +51,10 @@ final class DemoBackend: Backend {
     // ── Seeding (DemoData) ───────────────────────────────────────────────────
 
     func seedProfile(_ p: Profile) { sync { profilesById[p.id] = p } }
-    func seedMemory(_ m: Memory) {
+    func seedMeal(_ m: Meal) {
         sync {
-            memoriesById[m.id] = m
-            stampFromMemoryLocked(m)
+            mealsById[m.id] = m
+            tasteFromMealLocked(m)
         }
     }
     func seedTaste(_ t: Taste) {
@@ -69,17 +64,7 @@ final class DemoBackend: Backend {
             refitTasteLocked(user: t.userId, code: t.countryCode)
         }
     }
-
-    func seedStamp(_ s: Stamp) {
-        sync {
-            let key = "\(s.userId)|\(s.countryCode)"
-            stampsByKey[key] = s
-            stampedDates[key] = (s.firstVisited, s.lastVisited)
-            refitStampLocked(user: s.userId, code: s.countryCode)
-        }
-    }
     func seedFollow(_ follower: UUID, _ followee: UUID) { sync { _ = follows.insert([follower, followee]) } }
-    func seedBucket(_ codes: [String]) { sync { bucket.formUnion(codes) } }
     func seedReaction(_ r: Reaction) { sync { reactions.append(r) } }
     func seedComment(_ c: Comment) { sync { comments.append(c) } }
     func seedGroup(_ g: Group, members ids: [UUID]) {
@@ -92,7 +77,6 @@ final class DemoBackend: Backend {
         }
     }
     func seedPost(_ p: GroupPost) { sync { posts.append(p) } }
-    func seedTripPlan(_ plan: TripPlan) { sync { plans.append(plan) } }
     func seedSavedPlace(_ place: SavedPlace) { sync { places.append(place) } }
     func seedPostReaction(_ r: PostReaction) { sync { postReactions.append(r) } }
     func seedPostComment(_ c: PostComment) { sync { postComments.append(c) } }
@@ -111,7 +95,7 @@ final class DemoBackend: Backend {
         return sharesGroupLocked(a, b) || (follows.contains([a, b]) && follows.contains([b, a]))
     }
 
-    private func canSeeLocked(_ m: Memory) -> Bool {
+    private func canSeeLocked(_ m: Meal) -> Bool {
         m.userId == me || m.visibility == .public || (m.visibility == .friends && isFriendLocked(m.userId, me))
     }
 
@@ -119,46 +103,10 @@ final class DemoBackend: Backend {
         id == me || profilesById[id]?.isPublic == true || isFriendLocked(id, me)
     }
 
-    private func stampFromMemoryLocked(_ m: Memory) {
-        guard !m.isMeal else { return tasteFromMealLocked(m) }
-        let key = "\(m.userId)|\(m.countryCode)"
-        if stampsByKey[key] == nil {
-            stampsByKey[key] = Stamp(userId: m.userId, countryCode: m.countryCode,
-                                     firstVisited: nil, lastVisited: nil,
-                                     source: .memory, createdAt: m.createdAt)
-        }
-        refitStampLocked(user: m.userId, code: m.countryCode)
-    }
-
-    private func dropMemoryOnlyStampLocked(user: UUID, code: String, except id: UUID, meal: Bool = false) {
-        guard !meal else { return dropMealOnlyTasteLocked(user: user, code: code, except: id) }
-        let key = "\(user)|\(code)"
-        let others = memoriesById.values.contains {
-            !$0.isMeal && $0.userId == user && $0.countryCode == code && $0.id != id
-        }
-        if !others, stampsByKey[key]?.source == .memory {
-            stampsByKey[key] = nil
-            stampedDates[key] = nil
-        }
-        refitStampLocked(user: user, code: code)
-    }
-
-    /// Visible range = dates given directly ∪ memories there (refit_stamp_dates).
-    private func refitStampLocked(user: UUID, code: String) {
-        let key = "\(user)|\(code)"
-        guard var stamp = stampsByKey[key] else { return }
-        let days = memoriesById.values
-            .filter { !$0.isMeal && $0.userId == user && $0.countryCode == code }
-            .map { String($0.date.prefix(10)) }
-        let given = stampedDates[key]
-        stamp.firstVisited = ([given?.first].compactMap { $0 } + days).min()
-        stamp.lastVisited = ([given?.last].compactMap { $0 } + days).max()
-        stampsByKey[key] = stamp
-    }
-
     // Tastes mirror tastes + sync_taste_from_meal: a meal tastes its
     // cuisine; its last meal going takes a meal-only taste with it.
-    private func tasteFromMealLocked(_ m: Memory) {
+    private func tasteFromMealLocked(_ m: Meal) {
+        guard m.isMeal else { return }
         let key = "\(m.userId)|\(m.countryCode)"
         if tastesByKey[key] == nil {
             tastesByKey[key] = Taste(userId: m.userId, countryCode: m.countryCode, firstTasted: nil,
@@ -169,7 +117,7 @@ final class DemoBackend: Backend {
 
     private func dropMealOnlyTasteLocked(user: UUID, code: String, except id: UUID) {
         let key = "\(user)|\(code)"
-        let others = memoriesById.values.contains {
+        let others = mealsById.values.contains {
             $0.isMeal && $0.userId == user && $0.countryCode == code && $0.id != id
         }
         if !others, tastesByKey[key]?.source == .meal { tastesByKey[key] = nil }
@@ -179,7 +127,7 @@ final class DemoBackend: Backend {
     private func refitTasteLocked(user: UUID, code: String) {
         let key = "\(user)|\(code)"
         guard var taste = tastesByKey[key] else { return }
-        let days = memoriesById.values
+        let days = mealsById.values
             .filter { $0.isMeal && $0.userId == user && $0.countryCode == code }
             .map { String($0.date.prefix(10)) }
         taste.firstTasted = days.min()
@@ -250,33 +198,112 @@ final class DemoBackend: Backend {
         }
     }
 
-    // ── Memories ─────────────────────────────────────────────────────────────
+    // ── Meals ────────────────────────────────────────────────────────────────
 
-    func memories(userId: UUID) async throws -> [Memory] {
+    func meals(userId: UUID) async throws -> [Meal] {
         await wait()
         return sync {
-            memoriesById.values.filter { !$0.isMeal && $0.userId == userId && canSeeLocked($0) }
+            mealsById.values.filter { $0.isMeal && $0.userId == userId && canSeeLocked($0) }
                 .sorted { ($0.date, $0.createdAt) > ($1.date, $1.createdAt) }
         }
     }
 
-    func meals(userId: UUID) async throws -> [Memory] {
-        await wait()
-        return sync {
-            memoriesById.values.filter { $0.isMeal && $0.userId == userId && canSeeLocked($0) }
-                .sorted { ($0.date, $0.createdAt) > ($1.date, $1.createdAt) }
-        }
+    func meal(id: UUID) async throws -> Meal? {
+        sync { mealsById[id].flatMap { $0.isMeal && canSeeLocked($0) ? $0 : nil } }
     }
 
-    func meals(countryCode: String, userIds: [UUID]) async throws -> [Memory] {
+    func meals(ids: [UUID]) async throws -> [Meal] {
+        sync { ids.compactMap { mealsById[$0] }.filter { $0.isMeal && canSeeLocked($0) } }
+    }
+
+    func meals(countryCode: String, userIds: [UUID]) async throws -> [Meal] {
         await wait()
         let ids = Set(userIds)
         return sync {
-            memoriesById.values
+            mealsById.values
                 .filter { $0.isMeal && $0.countryCode == countryCode && ids.contains($0.userId) && canSeeLocked($0) }
                 .sorted { $0.date > $1.date }
         }
     }
+
+    func insertMeal(_ new: NewMeal) async throws -> Meal {
+        await wait()
+        let meal = Meal(id: new.id, userId: me, countryCode: new.countryCode, title: new.title,
+                        city: new.city, date: new.dateTried, notes: new.notes, photos: new.photos,
+                        lat: new.lat, lng: new.lng,
+                        visibility: Visibility(rawValue: new.visibility) ?? .friends, createdAt: Date(),
+                        kind: Meal.Kind(rawValue: new.kind) ?? .meal,
+                        restaurantName: new.restaurantName, dish: new.signatureDish)
+        let fault = takeFault()
+        if fault == .beforeWrite { throw URLError(.notConnectedToInternet) }
+        try sync {
+            guard mealsById[meal.id] == nil else {
+                throw AppError("duplicate key value violates unique constraint \"entries_pkey\"")
+            }
+            mealsById[meal.id] = meal
+            tasteFromMealLocked(meal)
+        }
+        if fault == .responseLost { throw URLError(.timedOut) }
+        return meal
+    }
+
+    func updateMeal(id: UUID, _ patch: MealPatch) async throws -> Meal {
+        await wait()
+        let fault = takeFault()
+        if fault == .beforeWrite { throw URLError(.notConnectedToInternet) }
+        let updated: Meal = try sync {
+            guard var meal = mealsById[id], meal.userId == me else {
+                throw AppError("That meal is gone.")
+            }
+            let oldCode = meal.countryCode
+            meal.countryCode = patch.countryCode
+            meal.title = patch.title
+            meal.city = patch.city
+            meal.date = patch.dateTried
+            meal.notes = patch.notes
+            meal.photos = patch.photos
+            meal.lat = patch.lat
+            meal.lng = patch.lng
+            meal.visibility = Visibility(rawValue: patch.visibility) ?? .friends
+            meal.restaurantName = patch.restaurantName
+            meal.dish = patch.signatureDish
+            mealsById[id] = meal
+            if oldCode != meal.countryCode { dropMealOnlyTasteLocked(user: me, code: oldCode, except: id) }
+            tasteFromMealLocked(meal)
+            return meal
+        }
+        if fault == .responseLost { throw URLError(.timedOut) }
+        return updated
+    }
+
+    func deleteMeal(_ meal: Meal) async throws {
+        await wait()
+        sync {
+            mealsById[meal.id] = nil
+            dropMealOnlyTasteLocked(user: meal.userId, code: meal.countryCode, except: meal.id)
+            reactions.removeAll { $0.entryId == meal.id }
+            comments.removeAll { $0.entryId == meal.id }
+        }
+    }
+
+    func uploadPhoto(_ jpeg: Data) async throws -> String {
+        try? await Task.sleep(for: .milliseconds(250))
+        let path = "\(me.uuidString.lowercased())/\(UUID().uuidString.lowercased()).jpg"
+        sync { uploaded[path] = jpeg }
+        return path
+    }
+
+    func removePhotos(_ paths: [String]) async {
+        sync { for p in paths { uploaded[p] = nil } }
+    }
+
+    func photoData(path: String) async throws -> Data {
+        if let data = sync({ uploaded[path] }) { return data }
+        guard let data = DemoPhotos.jpeg(for: path) else { throw AppError("Photo unavailable.") }
+        return data
+    }
+
+    // ── Tastes ───────────────────────────────────────────────────────────────
 
     func tastes(userIds: [UUID]) async throws -> [Taste] {
         let ids = Set(userIds)
@@ -302,237 +329,15 @@ final class DemoBackend: Backend {
         sync { tastesByKey["\(me)|\(countryCode)"] = nil }
     }
 
-    func memory(id: UUID) async throws -> Memory? {
-        sync { memoriesById[id].flatMap { canSeeLocked($0) ? $0 : nil } }
-    }
-
-    func memories(ids: [UUID]) async throws -> [Memory] {
-        sync { ids.compactMap { memoriesById[$0] }.filter { canSeeLocked($0) } }
-    }
-
-    func memories(countryCode: String, userIds: [UUID]) async throws -> [Memory] {
-        await wait()
-        let ids = Set(userIds)
-        return sync {
-            memoriesById.values
-                .filter { !$0.isMeal && $0.countryCode == countryCode && ids.contains($0.userId) && canSeeLocked($0) }
-                .sorted { $0.date > $1.date }
-        }
-    }
-
-    func insertMemory(_ new: NewMemory) async throws -> Memory {
-        await wait()
-        let memory = Memory(id: new.id, userId: me, countryCode: new.countryCode, title: new.title,
-                            city: new.city, date: new.dateTried, notes: new.notes, photos: new.photos,
-                            lat: new.lat, lng: new.lng,
-                            visibility: Visibility(rawValue: new.visibility) ?? .friends, createdAt: Date(),
-                            kind: Memory.Kind(rawValue: new.kind) ?? .memory,
-                            restaurantName: new.restaurantName, dish: new.signatureDish)
-        let fault = takeFault()
-        if fault == .beforeWrite { throw URLError(.notConnectedToInternet) }
-        try sync {
-            guard memoriesById[memory.id] == nil else {
-                throw AppError("duplicate key value violates unique constraint \"entries_pkey\"")
-            }
-            memoriesById[memory.id] = memory
-            stampFromMemoryLocked(memory)
-        }
-        if fault == .responseLost { throw URLError(.timedOut) }
-        return memory
-    }
-
-    func insertMemories(_ memories: [NewMemory]) async throws -> [Memory] {
-        var saved: [Memory] = []
-        for memory in memories { saved.append(try await insertMemory(memory)) }
-        return saved
-    }
-
-    func deleteMemories(ids: [UUID]) async throws {
-        await wait()
-        let doomed = sync { ids.compactMap { memoriesById[$0] }.filter { $0.userId == me } }
-        for memory in doomed { try await deleteMemory(memory) }
-    }
-
-    func updateMemory(id: UUID, _ patch: MemoryPatch) async throws -> Memory {
-        await wait()
-        let fault = takeFault()
-        if fault == .beforeWrite { throw URLError(.notConnectedToInternet) }
-        let updated: Memory = try sync {
-            guard var memory = memoriesById[id], memory.userId == me else {
-                throw AppError("That memory is gone.")
-            }
-            let oldCode = memory.countryCode
-            memory.countryCode = patch.countryCode
-            memory.title = patch.title
-            memory.city = patch.city
-            memory.date = patch.dateTried
-            memory.notes = patch.notes
-            memory.photos = patch.photos
-            memory.lat = patch.lat
-            memory.lng = patch.lng
-            memory.visibility = Visibility(rawValue: patch.visibility) ?? .friends
-            memory.restaurantName = patch.restaurantName
-            memory.dish = patch.signatureDish
-            memoriesById[id] = memory
-            if oldCode != memory.countryCode {
-                dropMemoryOnlyStampLocked(user: me, code: oldCode, except: id, meal: memory.isMeal)
-            }
-            stampFromMemoryLocked(memory)
-            return memory
-        }
-        if fault == .responseLost { throw URLError(.timedOut) }
-        return updated
-    }
-
-    func deleteMemory(_ memory: Memory) async throws {
-        await wait()
-        sync {
-            memoriesById[memory.id] = nil
-            dropMemoryOnlyStampLocked(user: memory.userId, code: memory.countryCode, except: memory.id,
-                                      meal: memory.isMeal)
-            reactions.removeAll { $0.entryId == memory.id }
-            comments.removeAll { $0.entryId == memory.id }
-        }
-    }
-
-    func uploadPhoto(_ jpeg: Data) async throws -> String {
-        try? await Task.sleep(for: .milliseconds(250))
-        let path = "\(me.uuidString.lowercased())/\(UUID().uuidString.lowercased()).jpg"
-        sync { uploaded[path] = jpeg }
-        return path
-    }
-
-    func removePhotos(_ paths: [String]) async {
-        sync { for p in paths { uploaded[p] = nil } }
-    }
-
-    func photoData(path: String) async throws -> Data {
-        if let data = sync({ uploaded[path] }) { return data }
-        guard let data = DemoPhotos.jpeg(for: path) else { throw AppError("Photo unavailable.") }
-        return data
-    }
-
-    // ── Stamps + bucket list ─────────────────────────────────────────────────
-
-    func stamps(userIds: [UUID]) async throws -> [Stamp] {
-        let ids = Set(userIds)
-        return sync {
-            stampsByKey.values.filter { ids.contains($0.userId) && canSeeProfileLocked($0.userId) }
-        }
-    }
-
-    func stamps(countryCode: String, userIds: [UUID]) async throws -> [Stamp] {
-        let ids = Set(userIds)
-        return sync {
-            stampsByKey.values.filter {
-                $0.countryCode == countryCode && ids.contains($0.userId) && canSeeProfileLocked($0.userId)
-            }
-        }
-    }
-
-    func addStamps(_ items: [StampInput]) async throws {
-        await wait()
-        sync {
-            for item in items {
-                let key = "\(me)|\(item.countryCode)"
-                let given = stampedDates[key]
-                stampedDates[key] = (
-                    [given?.first, item.firstVisited].compactMap { $0 }.min(),
-                    [given?.last, item.lastVisited].compactMap { $0 }.max()
-                )
-                if var existing = stampsByKey[key] {
-                    if existing.source == .memory { existing.source = item.source }
-                    stampsByKey[key] = existing
-                } else {
-                    stampsByKey[key] = Stamp(userId: me, countryCode: item.countryCode,
-                                             firstVisited: nil, lastVisited: nil,
-                                             source: item.source, createdAt: Date())
-                }
-                refitStampLocked(user: me, code: item.countryCode)
-            }
-        }
-    }
-
-    func removeStamp(countryCode: String) async throws {
-        await wait()
-        sync {
-            stampsByKey["\(me)|\(countryCode)"] = nil
-            stampedDates["\(me)|\(countryCode)"] = nil
-        }
-    }
-
-    func bucketList() async throws -> Set<String> { sync { bucket } }
-
-    func setBucketListed(_ code: String, _ on: Bool) async throws {
-        sync { if on { bucket.insert(code) } else { bucket.remove(code) } }
-    }
-
-    // ── Trips + saved places ─────────────────────────────────────────────────
-
-    func tripPlans() async throws -> [TripPlan] {
-        sync {
-            plans.filter { $0.userId == me || $0.groupId.map { sharesGroupLocked(me, $0) } ?? false }
-                .sorted { ($0.startsOn ?? "9999", $0.createdAt) < ($1.startsOn ?? "9999", $1.createdAt) }
-        }
-    }
-
-    func createTripPlan(_ plan: NewTripPlan) async throws -> TripPlan {
-        await wait()
-        let made = TripPlan(id: plan.id, userId: me, name: plan.name, countryCodes: plan.countryCodes,
-                            startsOn: plan.startsOn, endsOn: plan.endsOn, groupId: plan.groupId,
-                            notes: plan.notes, createdAt: Date())
-        sync { plans.append(made) }
-        return made
-    }
-
-    func createTripPlans(_ plans: [NewTripPlan]) async throws -> [TripPlan] {
-        var made: [TripPlan] = []
-        for plan in plans { made.append(try await createTripPlan(plan)) }
-        return made
-    }
-
-    func deleteTripPlans(ids: [UUID]) async throws {
-        for id in ids { try await deleteTripPlan(id: id) }
-    }
-
-    func updateTripPlan(id: UUID, _ patch: TripPlanPatch) async throws -> TripPlan {
-        await wait()
-        return try sync {
-            guard let index = plans.firstIndex(where: { $0.id == id && $0.userId == me }) else {
-                throw AppError("That trip is gone.")
-            }
-            plans[index].name = patch.name
-            plans[index].countryCodes = patch.countryCodes
-            plans[index].startsOn = patch.startsOn
-            plans[index].endsOn = patch.endsOn
-            plans[index].groupId = patch.groupId
-            plans[index].notes = patch.notes
-            return plans[index]
-        }
-    }
-
-    func deleteTripPlan(id: UUID) async throws {
-        await wait()
-        sync {
-            plans.removeAll { $0.id == id && $0.userId == me }
-            for index in places.indices where places[index].tripId == id { places[index].tripId = nil }
-        }
-    }
+    // ── Restaurants to try ───────────────────────────────────────────────────
 
     func savedPlaces() async throws -> [SavedPlace] {
-        sync {
-            places.filter { place in
-                place.userId == me
-                    || place.tripId.flatMap { id in plans.first { $0.id == id } }
-                        .map { $0.groupId.map { sharesGroupLocked(me, $0) } ?? false } ?? false
-            }
-            .sorted { $0.createdAt > $1.createdAt }
-        }
+        sync { places.filter { $0.userId == me && $0.isRestaurant }.sorted { $0.createdAt > $1.createdAt } }
     }
 
     func savePlace(_ place: NewSavedPlace) async throws -> SavedPlace {
         await wait()
-        let made = SavedPlace(id: place.id, userId: me, tripId: place.tripId, countryCode: place.countryCode,
+        let made = SavedPlace(id: place.id, userId: me, countryCode: place.countryCode,
                               title: place.title, city: place.city, lat: place.lat, lng: place.lng,
                               note: place.note, sourceEntryId: place.sourceEntryId, done: false,
                               createdAt: Date(), cuisineCode: place.cuisineCode)
@@ -544,9 +349,8 @@ final class DemoBackend: Backend {
         await wait()
         return try sync {
             guard let index = places.firstIndex(where: { $0.id == id && $0.userId == me }) else {
-                throw AppError("That place is gone.")
+                throw AppError("That restaurant is gone.")
             }
-            places[index].tripId = patch.tripId
             places[index].title = patch.title
             places[index].city = patch.city
             places[index].note = patch.note
@@ -596,13 +400,13 @@ final class DemoBackend: Backend {
 
     // ── Feeds ────────────────────────────────────────────────────────────────
 
-    func friendsFeed(before: Date?, limit: Int) async throws -> [Memory] {
+    func friendsFeed(before: Date?, limit: Int) async throws -> [Meal] {
         await wait()
         return sync {
             let following = Set(follows.filter { $0[0] == me }.map { $0[1] })
-            return memoriesById.values
+            return mealsById.values
                 .filter { m in
-                    m.userId != me && !blocked.contains(m.userId)
+                    m.isMeal && m.userId != me && !blocked.contains(m.userId)
                         && (following.contains(m.userId) || sharesGroupLocked(m.userId, me))
                         && canSeeLocked(m)
                         && (before.map { m.createdAt < $0 } ?? true)
@@ -612,20 +416,22 @@ final class DemoBackend: Backend {
         }
     }
 
-    func discoverFeed(before: Date?, limit: Int) async throws -> [Memory] {
+    func discoverFeed(before: Date?, limit: Int) async throws -> [Meal] {
         await wait()
         return sync {
-            memoriesById.values
-                .filter { m in m.visibility == .public && m.userId != me && (before.map { m.createdAt < $0 } ?? true) }
+            mealsById.values
+                .filter { m in
+                    m.isMeal && m.visibility == .public && m.userId != me && (before.map { m.createdAt < $0 } ?? true)
+                }
                 .sorted { $0.createdAt > $1.createdAt }
                 .prefix(limit).map { $0 }
         }
     }
 
-    func recentStamps(userIds: [UUID], limit: Int) async throws -> [Stamp] {
+    func recentTastes(userIds: [UUID], limit: Int) async throws -> [Taste] {
         let ids = Set(userIds)
         return sync {
-            stampsByKey.values
+            tastesByKey.values
                 .filter { ids.contains($0.userId) && canSeeProfileLocked($0.userId) && !blocked.contains($0.userId) }
                 .sorted { $0.createdAt > $1.createdAt }
                 .prefix(limit).map { $0 }
@@ -640,7 +446,7 @@ final class DemoBackend: Backend {
                 rows.append(ActivityRow(kind: .follow, actorId: f[0], entryId: nil, emoji: nil, body: nil,
                                         createdAt: DemoData.followDates[f[0]] ?? Date().addingTimeInterval(-86400 * 20)))
             }
-            let mine = Set(memoriesById.values.filter { $0.userId == me }.map(\.id))
+            let mine = Set(mealsById.values.filter { $0.userId == me }.map(\.id))
             for r in reactions where mine.contains(r.entryId) && r.userId != me {
                 rows.append(ActivityRow(kind: .reaction, actorId: r.userId, entryId: r.entryId, emoji: r.emoji,
                                         body: nil, createdAt: r.createdAt ?? Date()))
@@ -657,33 +463,33 @@ final class DemoBackend: Backend {
 
     // ── Reactions + comments ─────────────────────────────────────────────────
 
-    func reactions(memoryIds: [UUID]) async throws -> [Reaction] {
-        let ids = Set(memoryIds)
+    func reactions(mealIds: [UUID]) async throws -> [Reaction] {
+        let ids = Set(mealIds)
         return sync { reactions.filter { ids.contains($0.entryId) } }
     }
 
-    func setReaction(memoryId: UUID, emoji: String, on: Bool) async throws {
+    func setReaction(mealId: UUID, emoji: String, on: Bool) async throws {
         sync {
-            reactions.removeAll { $0.entryId == memoryId && $0.userId == me && $0.emoji == emoji }
-            if on { reactions.append(Reaction(entryId: memoryId, userId: me, emoji: emoji, createdAt: Date())) }
+            reactions.removeAll { $0.entryId == mealId && $0.userId == me && $0.emoji == emoji }
+            if on { reactions.append(Reaction(entryId: mealId, userId: me, emoji: emoji, createdAt: Date())) }
         }
     }
 
-    func comments(memoryId: UUID) async throws -> [Comment] {
+    func comments(mealId: UUID) async throws -> [Comment] {
         await wait()
-        return sync { comments.filter { $0.entryId == memoryId }.sorted { $0.createdAt < $1.createdAt } }
+        return sync { comments.filter { $0.entryId == mealId }.sorted { $0.createdAt < $1.createdAt } }
     }
 
-    func commentCounts(memoryIds: [UUID]) async throws -> [UUID: Int] {
-        let ids = Set(memoryIds)
+    func commentCounts(mealIds: [UUID]) async throws -> [UUID: Int] {
+        let ids = Set(mealIds)
         return sync {
             Dictionary(grouping: comments.filter { ids.contains($0.entryId) }, by: \.entryId).mapValues(\.count)
         }
     }
 
-    func addComment(memoryId: UUID, text: String) async throws {
+    func addComment(mealId: UUID, text: String) async throws {
         await wait()
-        sync { comments.append(Comment(id: UUID(), entryId: memoryId, authorId: me, text: text, createdAt: Date())) }
+        sync { comments.append(Comment(id: UUID(), entryId: mealId, authorId: me, text: text, createdAt: Date())) }
     }
 
     func deleteComment(id: UUID) async throws {
@@ -772,7 +578,7 @@ final class DemoBackend: Backend {
         sync { members.removeAll { $0.groupId == id && $0.userId == me } }
     }
 
-    // ── Group chat ───────────────────────────────────────────────────────────
+    // ── Table chat ───────────────────────────────────────────────────────────
 
     func posts(groupId: UUID, before: Date?, limit: Int) async throws -> [GroupPost] {
         await wait()
@@ -783,10 +589,11 @@ final class DemoBackend: Backend {
         }
     }
 
-    func createPost(groupId: UUID, text: String, memoryId: UUID?) async throws {
+    func createPost(groupId: UUID, text: String, mealId: UUID?, pick: DinnerPick?) async throws {
+        let body = text.trimmed.isEmpty ? (pick?.fallbackText ?? "") : text
         sync {
-            posts.append(GroupPost(id: UUID(), groupId: groupId, authorId: me, entryId: memoryId,
-                                   text: text, photos: [], createdAt: Date()))
+            posts.append(GroupPost(id: UUID(), groupId: groupId, authorId: me, entryId: mealId,
+                                   text: body, photos: [], createdAt: Date(), pick: pick))
         }
     }
 
@@ -834,8 +641,8 @@ final class DemoBackend: Backend {
 
 // ── Postcards ───────────────────────────────────────────────────────────────
 
-/// Stand-in travel photos: a painted sky, a sun, layered hills or waves and
-/// the scene's emoji. Deterministic per name, rendered on demand.
+/// Stand-in meal photos: a dish on a plate on a table, from above, with the
+/// dish's emoji. Deterministic per name, rendered on demand.
 enum DemoPhotos {
     private struct Scene {
         let top: UInt32
@@ -849,34 +656,6 @@ enum DemoPhotos {
     }
 
     private static let scenes: [String: Scene] = [
-        "kyoto": Scene(top: 0xF6B38A, bottom: 0xE0566B, ground: 0x5B2A3A, emoji: "⛩️"),
-        "tokyo": Scene(top: 0x241B4D, bottom: 0xC44B8A, ground: 0x160F2E, emoji: "🗼", night: true),
-        "seoul": Scene(top: 0x9CC3E6, bottom: 0xF1C6A8, ground: 0x4B5B6E, emoji: "🏯"),
-        "hongkong": Scene(top: 0x10233F, bottom: 0x2E7C8C, ground: 0x0A1626, emoji: "🌃", water: true, night: true),
-        "halong": Scene(top: 0xBFE6E0, bottom: 0x5FB3A6, ground: 0x2C6E62, emoji: "⛰️", water: true),
-        "bangkok": Scene(top: 0xFAD48B, bottom: 0xE8914A, ground: 0x7A3E1D, emoji: "🛕"),
-        "singapore": Scene(top: 0x2B2A5E, bottom: 0x3FA7A3, ground: 0x13213A, emoji: "🌆", water: true, night: true),
-        "lisbon": Scene(top: 0xA7D3F2, bottom: 0xF7E3A1, ground: 0xC4623A, emoji: "🚋"),
-        "marrakech": Scene(top: 0xF3C58B, bottom: 0xD9744A, ground: 0x8A3B22, emoji: "🕌"),
-        "machupicchu": Scene(top: 0xCFE3E8, bottom: 0x9DBF9E, ground: 0x3E6B45, emoji: "🏔️"),
-        "santorini": Scene(top: 0x2E5AA8, bottom: 0xF29E6B, ground: 0xF4F0E8, emoji: "🌅", water: true),
-        "iceland": Scene(top: 0xB9CBD6, bottom: 0x7FA0A8, ground: 0x3D5A4C, emoji: "🏞️"),
-        "rome": Scene(top: 0xF5D9A8, bottom: 0xE0A35E, ground: 0x9C5B2E, emoji: "🏛️"),
-        "milford": Scene(top: 0x9FC9D9, bottom: 0x5E8E86, ground: 0x2F4F46, emoji: "🛶", water: true),
-        "sydney": Scene(top: 0x7FC4EA, bottom: 0xBFE3F2, ground: 0x2A6FA0, emoji: "⛵️", water: true),
-        "bigsur": Scene(top: 0xF2B880, bottom: 0x7FA8C9, ground: 0x2F4B5E, emoji: "🌊", water: true),
-        "lakelouise": Scene(top: 0xBFE0F0, bottom: 0x62B6C9, ground: 0x2D5E5A, emoji: "🛶", water: true),
-        "barcelona": Scene(top: 0xF7D08A, bottom: 0xE58B5C, ground: 0x8F4A2E, emoji: "⛪️"),
-        "borabora": Scene(top: 0x7FD3E8, bottom: 0x3DB7B0, ground: 0x1F7C73, emoji: "🏝️", water: true),
-        "petra": Scene(top: 0xF2C9A0, bottom: 0xD08257, ground: 0x8C4A2F, emoji: "🏜️"),
-        "edinburgh": Scene(top: 0x9AA9B8, bottom: 0xC7B9A5, ground: 0x4A4F57, emoji: "🏰"),
-        "capetown": Scene(top: 0x8FC8EE, bottom: 0xF4D9A4, ground: 0x4F6B4A, emoji: "⛰️"),
-        "hoian": Scene(top: 0x30204F, bottom: 0xE0833C, ground: 0x1E1430, emoji: "🏮", night: true),
-        "agra": Scene(top: 0xF6D6B8, bottom: 0xE9A77F, ground: 0xB8B0A5, emoji: "🕌"),
-        "hallstatt": Scene(top: 0xCBE0EC, bottom: 0x8FB7C4, ground: 0x3F5E58, emoji: "🏘️", water: true),
-        "cappadocia": Scene(top: 0xF7C89B, bottom: 0xF09A7A, ground: 0x9E6A4B, emoji: "🎈"),
-        "iguazu": Scene(top: 0xB8E0C8, bottom: 0x6FB59A, ground: 0x2F6A4F, emoji: "💦", water: true),
-        "reykjavik": Scene(top: 0x112A3E, bottom: 0x2FA38A, ground: 0x0B1A26, emoji: "🌌", night: true),
         // Meals
         "khachapuri": Scene(top: 0xF4DDB5, bottom: 0xD9A56B, ground: 0x6E3E22, emoji: "🧀", plate: true),
         "injera": Scene(top: 0xF0D6B0, bottom: 0xB9764A, ground: 0x5A3421, emoji: "🍛", plate: true),
@@ -893,6 +672,10 @@ enum DemoPhotos {
         "plov": Scene(top: 0xF5E2BC, bottom: 0xD7964D, ground: 0x7A4A1C, emoji: "🍚", plate: true),
         "arepa": Scene(top: 0xF8ECCB, bottom: 0xE3B25E, ground: 0x7C5220, emoji: "🫓", plate: true),
         "churrasco": Scene(top: 0x3A2320, bottom: 0x9A4A32, ground: 0x1E1210, emoji: "🥩", plate: true),
+        "dumplings": Scene(top: 0xF2EBDD, bottom: 0xC9B08A, ground: 0x5E4A30, emoji: "🥟", plate: true),
+        "kebab": Scene(top: 0xF3D9B3, bottom: 0xC8703F, ground: 0x6A2E17, emoji: "🥙", plate: true),
+        "suya": Scene(top: 0x3A2419, bottom: 0xB0552E, ground: 0x1F130D, emoji: "🍢", plate: true),
+        "thieb": Scene(top: 0xF5DFB8, bottom: 0xD4643A, ground: 0x6E2A16, emoji: "🐟", plate: true),
     ]
 
     private static var cache: [String: Data] = [:]

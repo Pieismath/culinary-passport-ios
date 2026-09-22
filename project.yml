@@ -39,11 +39,11 @@ targets:
         # must be supported" warning without pretending to support landscape.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true
-        NSCameraUsageDescription: "Take photos of your meals and travels, and for your profile."
-        NSLocationWhenInUseUsageDescription: "Stampd uses your location to find restaurants near you, when you log a meal or roll for dinner. It isn't stored or shared."
+        NSCameraUsageDescription: "Take photos of your meals, and for your profile."
+        NSLocationWhenInUseUsageDescription: "Stampd uses your location to find restaurants near you when you spin the globe or log a meal. It isn't stored or shared."
         # Read access powers "Find countries in my photos" — locations are read
         # on-device and nothing is uploaded unless the user posts a memory.
-        NSPhotoLibraryUsageDescription: "Stampd reads where your photos were taken to find the countries you've visited, and lets you add photos to memories. This happens on your phone; nothing is uploaded unless you post it."
+        NSPhotoLibraryUsageDescription: "Stampd reads where a meal photo was taken to find the restaurant you ate at. This happens on your phone; a photo is only uploaded when you add it to a meal."
         # Config.swift reads these; values come from Config.xcconfig at build time
         SUPABASE_URL: $(SUPABASE_URL)
         SUPABASE_ANON_KEY: $(SUPABASE_ANON_KEY)

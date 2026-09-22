@@ -24,7 +24,7 @@ enum Continent: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-/// A stampable place. Most come from the bundled Natural Earth 110m polygons;
+/// A place on the globe. Most come from the bundled Natural Earth 110m polygons;
 /// countries too small for that dataset (Singapore, Malta, the Maldives…) and
 /// popular destination territories (Hong Kong, Tahiti, Aruba…) are added from
 /// `CountryStore.smallPlaces` and drawn on the globe as dots.
@@ -62,7 +62,7 @@ struct Country: Identifiable, Hashable {
 }
 
 enum CountryStore {
-    /// Every stampable place, name-sorted. Loaded once.
+    /// Every place on the globe, name-sorted. Loaded once.
     static let all: [Country] = load()
     static let byCode: [String: Country] = Dictionary(all.map { ($0.code, $0) }, uniquingKeysWith: { a, _ in a })
 

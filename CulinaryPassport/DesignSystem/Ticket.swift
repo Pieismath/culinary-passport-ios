@@ -1,9 +1,9 @@
 import SwiftUI
 
-// Paper the app already implies: a boarding pass for a trip, a luggage tag
-// for a place you've saved. Both are real shapes with a torn stub and a
-// punched hole, not rounded rectangles with a different tint — a passport app
-// that renders everything as a card wastes the metaphor it was built on.
+// Paper that goes with dinner: a ticket for tonight's pick (a torn stub with
+// the distance on it), a tag for a restaurant you've saved, the back of a
+// postcard for a note. Real shapes with a stub and a punched hole, not
+// rounded rectangles with a different tint.
 
 /// A ticket: rounded card with a stub torn off the trailing edge.
 struct TicketShape: InsettableShape {
@@ -31,7 +31,7 @@ struct TicketShape: InsettableShape {
 }
 
 /// The dashed line between a ticket and its stub.
-private struct TicketTear: Shape {
+struct TicketTear: Shape {
     var stubWidth: CGFloat
     var inset: CGFloat = 14
 
@@ -44,18 +44,34 @@ private struct TicketTear: Shape {
     }
 }
 
-/// A luggage tag: a card with the strap hole punched out of its leading edge.
+/// A tag: clipped corners on its leading end, and the string hole punched
+/// through it — the shape a restaurant you're saving hangs from.
 struct LuggageTagShape: InsettableShape {
     var corner: CGFloat = Metrics.corner
     var hole: CGFloat = 6
+    var chamfer: CGFloat = 18
     var insetAmount: CGFloat = 0
 
     func path(in rect: CGRect) -> Path {
         let rect = rect.insetBy(dx: insetAmount, dy: insetAmount)
+        let c = min(chamfer, rect.height / 2)
+        let r = min(corner, rect.height / 2)
+        var tag = Path()
+        tag.move(to: CGPoint(x: rect.minX + c, y: rect.minY))
+        tag.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
+        tag.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.minY),
+                   tangent2End: CGPoint(x: rect.maxX, y: rect.minY + r), radius: r)
+        tag.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - r))
+        tag.addArc(tangent1End: CGPoint(x: rect.maxX, y: rect.maxY),
+                   tangent2End: CGPoint(x: rect.maxX - r, y: rect.maxY), radius: r)
+        tag.addLine(to: CGPoint(x: rect.minX + c, y: rect.maxY))
+        tag.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - c))
+        tag.addLine(to: CGPoint(x: rect.minX, y: rect.minY + c))
+        tag.closeSubpath()
         var punch = Path()
         punch.addEllipse(in: CGRect(x: rect.minX + 17 - hole, y: rect.midY - hole,
                                     width: hole * 2, height: hole * 2))
-        return Path(roundedRect: rect, cornerRadius: corner, style: .continuous).subtracting(punch)
+        return tag.subtracting(punch)
     }
 
     func inset(by amount: CGFloat) -> LuggageTagShape {
@@ -65,8 +81,67 @@ struct LuggageTagShape: InsettableShape {
     }
 }
 
+/// A till receipt: straight sides, zig-zag tear at the top and bottom.
+struct ReceiptShape: Shape {
+    var tooth: CGFloat = 12
+    var depth: CGFloat = 6
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let count = max(1, Int(rect.width / tooth))
+        let step = rect.width / CGFloat(count)
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY + depth))
+        for index in 0..<count {
+            let x = rect.minX + CGFloat(index) * step
+            path.addLine(to: CGPoint(x: x + step / 2, y: rect.minY))
+            path.addLine(to: CGPoint(x: x + step, y: rect.minY + depth))
+        }
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - depth))
+        for index in (0..<count).reversed() {
+            let x = rect.minX + CGFloat(index) * step
+            path.addLine(to: CGPoint(x: x + step / 2, y: rect.maxY))
+            path.addLine(to: CGPoint(x: x, y: rect.maxY - depth))
+        }
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// A dashed line across a receipt.
+struct DashedRule: View {
+    var body: some View {
+        Line()
+            .stroke(Color.hairline, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            .frame(height: 1)
+            .accessibilityHidden(true)
+    }
+
+    private struct Line: Shape {
+        func path(in rect: CGRect) -> Path {
+            var path = Path()
+            path.move(to: CGPoint(x: rect.minX, y: rect.midY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+            return path
+        }
+    }
+}
+
+/// Dots leading from a label to its value.
+struct DottedLeader: View {
+    var body: some View {
+        GeometryReader { geometry in
+            Path { path in
+                path.move(to: CGPoint(x: 0, y: geometry.size.height / 2))
+                path.addLine(to: CGPoint(x: geometry.size.width, y: geometry.size.height / 2))
+            }
+            .stroke(Color.inkTertiary.opacity(0.6), style: StrokeStyle(lineWidth: 1.2, lineCap: .round, dash: [0.1, 4]))
+        }
+        .accessibilityHidden(true)
+    }
+}
+
 /// Content on the ticket, content on the stub, torn line down the middle.
-struct BoardingPass<Main: View, Stub: View>: View {
+struct TicketCard<Main: View, Stub: View>: View {
     var stubWidth: CGFloat = 92
     var stubTint: Color = .sunken
     @ViewBuilder var main: () -> Main
@@ -95,78 +170,6 @@ struct BoardingPass<Main: View, Stub: View>: View {
             TicketShape(stubWidth: stubWidth).strokeBorder(Color.hairline.opacity(0.8), lineWidth: 0.5)
         }
         .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
-    }
-}
-
-/// "IN 92 DAYS" · "DAY 3 OF 10" · "SOMEDAY" — the state of a plan, in the
-/// monospaced type a ticket would use.
-struct CountdownChip: View {
-    let plan: TripPlan
-
-    private var isNow: Bool { if case .now = plan.phase() { return true } else { return false } }
-
-    var body: some View {
-        Text(plan.countdownText().uppercased())
-            .font(.system(size: 11, weight: .bold, design: .monospaced))
-            .tracking(0.6)
-            .foregroundStyle(isNow ? Color.onBrand : Color.brand)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(isNow ? Color.brand : Color.brandSoft, in: Capsule())
-    }
-}
-
-/// A trip you're planning, as a boarding pass.
-struct TripPlanCard: View {
-    let plan: TripPlan
-    /// Who's coming, when it's a group trip.
-    var members: [Profile] = []
-    var savedCount: Int = 0
-
-    var body: some View {
-        BoardingPass {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 8) {
-                    CountdownChip(plan: plan)
-                    if !members.isEmpty {
-                        AvatarStack(profiles: members, size: 20)
-                    }
-                }
-                Text(plan.title)
-                    .font(.displayXSmall)
-                    .foregroundStyle(Color.ink)
-                    .lineLimit(1)
-                HStack(spacing: 6) {
-                    if !plan.flags.isEmpty { Text(plan.flags).font(.subheadline) }
-                    Text(plan.dateRangeText ?? "No dates yet")
-                        .font(.subheadline)
-                        .foregroundStyle(Color.inkSecondary)
-                }
-                if savedCount > 0 {
-                    Label(savedCount.counted("place"), systemImage: "mappin.and.ellipse")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Color.inkSecondary)
-                }
-            }
-        } stub: {
-            VStack(spacing: 1) {
-                if let days = plan.days {
-                    Text("\(days)")
-                        .font(.system(size: 26, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.ink)
-                    Text(days == 1 ? "DAY" : "DAYS")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .tracking(1)
-                        .foregroundStyle(Color.inkTertiary)
-                } else {
-                    Image(systemName: "airplane.departure")
-                        .font(.title3)
-                        .foregroundStyle(Color.inkTertiary)
-                }
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(plan.title), \(plan.countdownText())")
     }
 }
 
@@ -211,7 +214,7 @@ struct PostcardNote: View {
     }
 }
 
-/// Overlapping avatars — who's on a trip, without a row of names.
+/// Overlapping avatars — who's in, without a row of names.
 struct AvatarStack: View {
     let profiles: [Profile]
     var size: CGFloat = 22

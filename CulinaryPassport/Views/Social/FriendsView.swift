@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Where your people have been lately — and, one tab over, the public
-/// travels of everyone else.
-struct FriendsView: View {
+/// What your people have eaten lately — and, one segment over, the public
+/// plates of everyone else. Opened from Tables.
+struct FriendsFeedView: View {
     enum Segment: String, CaseIterable, Identifiable {
         case friends = "Friends"
         case discover = "Discover"
@@ -13,62 +13,47 @@ struct FriendsView: View {
     @State private var segment: Segment = .friends
     @State private var friends = FeedModel(kind: .friends)
     @State private var discover = FeedModel(kind: .discover)
-    @State private var viewing: Memory?
+    @State private var viewing: Meal?
     @State private var profileId: UUID?
-    @State private var showActivity = false
     @State private var showSearch = false
 
     private var feed: FeedModel { segment == .friends ? friends : discover }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 16) {
-                    Picker("Feed", selection: $segment) {
-                        ForEach(Segment.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-
-                    if segment == .friends && !friends.newStamps.isEmpty {
-                        newStampsStrip
-                    }
-
-                    content
+        ScrollView {
+            LazyVStack(spacing: 16) {
+                Picker("Feed", selection: $segment) {
+                    ForEach(Segment.allCases) { Text($0.rawValue).tag($0) }
                 }
-                .padding(.horizontal, Metrics.gutter)
-                .padding(.bottom, 24)
+                .pickerStyle(.segmented)
+
+                if segment == .friends && !friends.newTastes.isEmpty {
+                    newTastesStrip
+                }
+
+                content
             }
-            .paperBackground()
-            .refreshable { await feed.refresh(app: app) }
-            .navigationTitle("Friends")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showSearch = true } label: {
-                        Image(systemName: "person.badge.plus")
-                    }
+            .padding(.horizontal, Metrics.gutter)
+            .padding(.bottom, 24)
+        }
+        .paperBackground()
+        .refreshable { await feed.refresh(app: app) }
+        .navigationTitle("Friends' plates")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showSearch = true } label: { Image(systemName: "person.badge.plus") }
                     .accessibilityLabel("Find people")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showActivity = true } label: {
-                        Image(systemName: app.unseenActivity > 0 ? "bell.badge" : "bell")
-                            .symbolRenderingMode(app.unseenActivity > 0 ? .multicolor : .monochrome)
-                    }
-                    .accessibilityLabel(app.unseenActivity > 0 ? "Activity, \(app.unseenActivity) new" : "Activity")
-                }
             }
-            .navigationDestination(item: $profileId) { ProfileView(userId: $0) }
-            .sheet(item: $viewing) { MemoryDetailView(memory: $0) }
-            .sheet(isPresented: $showActivity, onDismiss: { app.markActivitySeen() }) {
-                ActivityView()
-            }
-            .sheet(isPresented: $showSearch) { PeopleSearchView() }
-            .task(id: segment) {
-                if !feed.loaded { await feed.refresh(app: app) }
-            }
-            .onChange(of: app.following) {
-                // New follows change what belongs in the feed.
-                Task { await friends.refresh(app: app) }
-            }
+        }
+        .navigationDestination(item: $profileId) { ProfileView(userId: $0) }
+        .sheet(item: $viewing) { MealDetailView(meal: $0) }
+        .sheet(isPresented: $showSearch) { PeopleSearchView() }
+        .task(id: segment) {
+            if !feed.loaded { await feed.refresh(app: app) }
+        }
+        .onChange(of: app.following) {
+            Task { await friends.refresh(app: app) }
         }
     }
 
@@ -84,16 +69,16 @@ struct FriendsView: View {
         } else if feed.visible(app: app).isEmpty {
             emptyState.padding(.top, 50)
         } else {
-            ForEach(feed.visible(app: app)) { memory in
-                MemoryCard(
-                    memory: memory,
-                    author: app.profile(memory.userId),
-                    tallies: feed.tallies(for: memory.id, me: app.myId),
-                    commentCount: feed.commentCounts[memory.id] ?? 0,
-                    badge: feed.firstVisitBadge(for: memory),
-                    onOpen: { viewing = memory },
-                    onOpenAuthor: { profileId = memory.userId },
-                    onReact: { emoji, on in Task { await feed.react(memory.id, emoji: emoji, on: on, app: app) } }
+            ForEach(feed.visible(app: app)) { meal in
+                MealCard(
+                    meal: meal,
+                    author: app.profile(meal.userId),
+                    tallies: feed.tallies(for: meal.id, me: app.myId),
+                    commentCount: feed.commentCounts[meal.id] ?? 0,
+                    badge: feed.firstTasteBadge(for: meal),
+                    onOpen: { viewing = meal },
+                    onOpenAuthor: { profileId = meal.userId },
+                    onReact: { emoji, on in Task { await feed.react(meal.id, emoji: emoji, on: on, app: app) } }
                 )
             }
             // Paging sentinel. Keyed by page size so it re-appears after each
@@ -113,41 +98,41 @@ struct FriendsView: View {
         case .friends:
             if app.following.isEmpty && app.groups.isEmpty {
                 EmptyStateView(systemImage: "person.2",
-                               title: "Travel's better with friends",
-                               message: "Follow friends to see their trips here — and when they follow you back, you'll see each other's friends-only memories.",
+                               title: "Dinner's better with friends",
+                               message: "Follow friends to see what they're eating — and when they follow you back, you'll see each other's friends-only meals.",
                                primaryTitle: "Find friends",
                                primaryAction: { showSearch = true })
             } else {
-                EmptyStateView(systemImage: "airplane.departure",
-                               title: "Quiet skies",
-                               message: "Nobody you follow has posted a memory yet. Share one of yours to get things going.")
+                EmptyStateView(systemImage: "fork.knife",
+                               title: "Nothing on the table yet",
+                               message: "Nobody you follow has logged a meal yet. Log one of yours to get things going.")
             }
         case .discover:
             EmptyStateView(systemImage: "sparkles",
                            title: "Nothing to discover yet",
-                           message: "Public memories from travellers everywhere will appear here.")
+                           message: "Public meals from people everywhere will appear here.")
         }
     }
 
-    private var newStampsStrip: some View {
+    private var newTastesStrip: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Eyebrow(text: "New stamps")
+            Eyebrow(text: "New cuisines")
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    ForEach(friends.newStamps) { stamp in
-                        Button { profileId = stamp.userId } label: {
+                    ForEach(friends.newTastes) { taste in
+                        Button { profileId = taste.userId } label: {
                             HStack(spacing: 10) {
                                 ZStack(alignment: .bottomTrailing) {
-                                    AvatarView(profile: app.profile(stamp.userId), size: 40)
-                                    Text(Country.flag(for: stamp.countryCode))
+                                    AvatarView(profile: app.profile(taste.userId), size: 40)
+                                    Text(Country.flag(for: taste.countryCode))
                                         .font(.system(size: 17))
                                         .offset(x: 5, y: 4)
                                 }
                                 VStack(alignment: .leading, spacing: 1) {
-                                    Text(app.profile(stamp.userId)?.firstName ?? "Friend")
+                                    Text(app.profile(taste.userId)?.firstName ?? "Friend")
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(Color.ink)
-                                    Text("\(stamp.country?.name ?? stamp.countryCode) · \(RelativeTime.short(stamp.createdAt))")
+                                    Text("\(taste.cuisine) · \(RelativeTime.short(taste.createdAt))")
                                         .font(.caption)
                                         .foregroundStyle(Color.inkSecondary)
                                         .lineLimit(1)
@@ -168,19 +153,18 @@ struct FriendsView: View {
     }
 }
 
-/// One feed's items, reactions and paging.
+/// One feed's meals, reactions and paging.
 @MainActor
 @Observable
 final class FeedModel {
     enum Kind { case friends, discover }
 
     let kind: Kind
-    var items: [Memory] = []
+    var items: [Meal] = []
     var reactions: [UUID: [Reaction]] = [:]
     var commentCounts: [UUID: Int] = [:]
-    var newStamps: [Stamp] = []
-    /// Stamps of authors, to badge a memory as their first time in a country.
-    var authorStamps: [String: Stamp] = [:]
+    /// "Maya tasted Senegalese" — friends' first tastes lately.
+    var newTastes: [Taste] = []
     /// Authors' tastes, to badge a meal as their first of a cuisine.
     var authorTastes: [String: Taste] = [:]
     var loaded = false
@@ -191,10 +175,10 @@ final class FeedModel {
 
     init(kind: Kind) { self.kind = kind }
 
-    func visible(app: AppModel) -> [Memory] {
-        items.filter { memory in
-            guard !app.blocked.contains(memory.userId) else { return false }
-            if kind == .discover { return app.profile(memory.userId)?.isPublic == true }
+    func visible(app: AppModel) -> [Meal] {
+        items.filter { meal in
+            guard !app.blocked.contains(meal.userId) else { return false }
+            if kind == .discover { return app.profile(meal.userId)?.isPublic == true }
             return true
         }
     }
@@ -206,16 +190,16 @@ final class FeedModel {
             exhausted = page.count < pageSize
             await decorate(page, app: app, replacing: true)
             if kind == .friends {
-                let recent = (try? await app.backend.recentStamps(userIds: Array(app.networkIds), limit: 30)) ?? []
+                let recent = (try? await app.backend.recentTastes(userIds: Array(app.networkIds), limit: 30)) ?? []
                 _ = await app.profiles(for: recent.map(\.userId))
-                // One chip per person+week so a photo import of 14 countries
-                // doesn't flood the strip.
+                // One chip per person a week, so ticking twenty cuisines at
+                // once doesn't flood the strip.
                 var seen = Set<String>()
-                newStamps = recent.filter { stamp in
-                    guard Date().timeIntervalSince(stamp.createdAt) < 14 * 86_400,
-                          !app.blocked.contains(stamp.userId) else { return false }
-                    let week = Int(stamp.createdAt.timeIntervalSince1970 / (7 * 86_400))
-                    return seen.insert("\(stamp.userId)|\(week)|\(stamp.source == .photos ? "bulk" : stamp.countryCode)").inserted
+                newTastes = recent.filter { taste in
+                    guard Date().timeIntervalSince(taste.createdAt) < 14 * 86_400,
+                          !app.blocked.contains(taste.userId) else { return false }
+                    let week = Int(taste.createdAt.timeIntervalSince1970 / (7 * 86_400))
+                    return seen.insert("\(taste.userId)|\(week)|\(taste.source == .manual ? "ticked" : taste.countryCode)").inserted
                 }
             }
         } catch {
@@ -236,18 +220,18 @@ final class FeedModel {
         await decorate(fresh, app: app, replacing: false)
     }
 
-    private func fetch(app: AppModel, before: Date?) async throws -> [Memory] {
+    private func fetch(app: AppModel, before: Date?) async throws -> [Meal] {
         switch kind {
         case .friends: try await app.backend.friendsFeed(before: before, limit: pageSize)
         case .discover: try await app.backend.discoverFeed(before: before, limit: pageSize)
         }
     }
 
-    private func decorate(_ page: [Memory], app: AppModel, replacing: Bool) async {
+    private func decorate(_ page: [Meal], app: AppModel, replacing: Bool) async {
         let ids = page.map(\.id)
         _ = await app.profiles(for: page.map(\.userId))
-        let fetchedReactions = (try? await app.backend.reactions(memoryIds: ids)) ?? []
-        let counts = (try? await app.backend.commentCounts(memoryIds: ids)) ?? [:]
+        let fetchedReactions = (try? await app.backend.reactions(mealIds: ids)) ?? []
+        let counts = (try? await app.backend.commentCounts(mealIds: ids)) ?? [:]
         let grouped = Dictionary(grouping: fetchedReactions, by: \.entryId)
         if replacing {
             reactions = grouped
@@ -256,11 +240,7 @@ final class FeedModel {
             reactions.merge(grouped) { _, new in new }
             commentCounts.merge(counts) { _, new in new }
         }
-        let authors = Array(Set(page.map(\.userId)))
-        if let stamps = try? await app.backend.stamps(userIds: authors) {
-            for stamp in stamps { authorStamps["\(stamp.userId)|\(stamp.countryCode)"] = stamp }
-        }
-        let cooks = Array(Set(page.filter(\.isMeal).map(\.userId)))
+        let cooks = Array(Set(page.map(\.userId)))
         if !cooks.isEmpty, let tastes = try? await app.backend.tastes(userIds: cooks) {
             for taste in tastes { authorTastes["\(taste.userId)|\(taste.countryCode)"] = taste }
         }
@@ -270,30 +250,24 @@ final class FeedModel {
         ReactionTally.tally((reactions[id] ?? []).map { ($0.emoji, $0.userId) }, me: me)
     }
 
-    /// "New stamp" when this memory is the author's first visit to the country.
-    func firstVisitBadge(for memory: Memory) -> String? {
-        if memory.isMeal {
-            guard let taste = authorTastes["\(memory.userId)|\(memory.countryCode)"],
-                  taste.firstTasted == memory.date,
-                  Date().timeIntervalSince(memory.createdAt) < 30 * 86_400 else { return nil }
-            return "First taste"
-        }
-        guard let stamp = authorStamps["\(memory.userId)|\(memory.countryCode)"],
-              stamp.firstVisited == memory.date,
-              Date().timeIntervalSince(memory.createdAt) < 30 * 86_400 else { return nil }
-        return "New stamp"
+    /// "First taste" when this meal is the author's first of its cuisine.
+    func firstTasteBadge(for meal: Meal) -> String? {
+        guard let taste = authorTastes["\(meal.userId)|\(meal.countryCode)"],
+              taste.firstTasted == meal.date,
+              Date().timeIntervalSince(meal.createdAt) < 30 * 86_400 else { return nil }
+        return "First taste"
     }
 
-    func react(_ memoryId: UUID, emoji: String, on: Bool, app: AppModel) async {
+    func react(_ mealId: UUID, emoji: String, on: Bool, app: AppModel) async {
         guard let me = app.myId else { return }
-        let before = reactions[memoryId] ?? []
+        let before = reactions[mealId] ?? []
         var next = before.filter { !($0.userId == me && $0.emoji == emoji) }
-        if on { next.append(Reaction(entryId: memoryId, userId: me, emoji: emoji, createdAt: Date())) }
-        reactions[memoryId] = next
+        if on { next.append(Reaction(entryId: mealId, userId: me, emoji: emoji, createdAt: Date())) }
+        reactions[mealId] = next
         do {
-            try await app.backend.setReaction(memoryId: memoryId, emoji: emoji, on: on)
+            try await app.backend.setReaction(mealId: mealId, emoji: emoji, on: on)
         } catch {
-            reactions[memoryId] = before
+            reactions[mealId] = before
             app.show(error)
         }
     }
@@ -304,12 +278,11 @@ struct ActivityView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
     @State private var rows: [ActivityRow] = []
-    @State private var memories: [UUID: Memory] = [:]
+    @State private var meals: [UUID: Meal] = [:]
     @State private var loaded = false
-    /// Captured before marking seen, so the unseen dots actually show. (The
-    /// old view overwrote last-seen before rows rendered — dots never appeared.)
+    /// Captured before marking seen, so the unseen dots actually show.
     @State private var seenBefore = Date.distantPast
-    @State private var viewing: Memory?
+    @State private var viewing: Meal?
 
     var body: some View {
         NavigationStack {
@@ -325,21 +298,21 @@ struct ActivityView: View {
                     ProgressView()
                 } else if rows.isEmpty {
                     EmptyStateView(systemImage: "bell", title: "Nothing yet",
-                                   message: "New followers, reactions and comments on your memories show up here.")
+                                   message: "New followers, reactions and comments on your meals show up here.")
                 }
             }
             .navigationTitle("Activity")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
             .navigationDestination(for: UUID.self) { ProfileView(userId: $0) }
-            .sheet(item: $viewing) { MemoryDetailView(memory: $0) }
+            .sheet(item: $viewing) { MealDetailView(meal: $0) }
             .task {
                 seenBefore = app.activityLastSeen
                 rows = (try? await app.backend.activity(limit: 80)) ?? []
                 _ = await app.profiles(for: rows.map(\.actorId))
                 let ids = Array(Set(rows.compactMap(\.entryId)))
-                let fetched = (try? await app.backend.memories(ids: ids)) ?? []
-                memories = Dictionary(uniqueKeysWithValues: fetched.map { ($0.id, $0) })
+                let fetched = (try? await app.backend.meals(ids: ids)) ?? []
+                meals = Dictionary(uniqueKeysWithValues: fetched.map { ($0.id, $0) })
                 loaded = true
                 app.markActivitySeen()
             }
@@ -348,7 +321,7 @@ struct ActivityView: View {
 
     @ViewBuilder private func rowView(_ row: ActivityRow) -> some View {
         let actor = app.profile(row.actorId)
-        let memory = row.entryId.flatMap { memories[$0] }
+        let meal = row.entryId.flatMap { meals[$0] }
         let content = HStack(spacing: 12) {
             AvatarView(profile: actor, size: 42)
             VStack(alignment: .leading, spacing: 3) {
@@ -357,7 +330,7 @@ struct ActivityView: View {
                     case .follow:
                         Text("\(Text(actor?.name ?? "Someone").bold()) started following you")
                     case .reaction:
-                        Text("\(Text(actor?.name ?? "Someone").bold()) reacted \(row.emoji ?? "") to \(memory?.displayTitle ?? "your memory")")
+                        Text("\(Text(actor?.name ?? "Someone").bold()) reacted \(row.emoji ?? "") to \(meal?.displayTitle ?? "your meal")")
                     case .comment:
                         Text("\(Text(actor?.name ?? "Someone").bold()) commented: \(row.body ?? "")")
                     }
@@ -370,10 +343,8 @@ struct ActivityView: View {
                     .foregroundStyle(Color.inkTertiary)
             }
             Spacer(minLength: 4)
-            if let memory, let first = memory.photos.first {
-                StoragePhoto(path: first, maxPixel: 200)
-                    .frame(width: 46, height: 46)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            if let meal {
+                MealPlate(meal: meal, size: 46, showsFlag: false)
             }
             if row.createdAt > seenBefore {
                 Circle().fill(Color.stampRed).frame(width: 8, height: 8)
@@ -382,8 +353,8 @@ struct ActivityView: View {
         }
         .padding(.vertical, 2)
 
-        if let memory {
-            Button { viewing = memory } label: { content.contentShape(Rectangle()) }
+        if let meal {
+            Button { viewing = meal } label: { content.contentShape(Rectangle()) }
                 .buttonStyle(.plain)
         } else {
             NavigationLink(value: row.actorId) { content }

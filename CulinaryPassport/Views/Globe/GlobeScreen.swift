@@ -1,115 +1,116 @@
 import SwiftUI
 
-/// Home: your globe. Countries you've visited wear your colour (deeper with
-/// every memory), cuisines you've tasted wear a lighter wash of it, your
-/// bucket list glows amber, and a tap opens what's there.
+/// Home: the world, served on a plate. Every cuisine you've eaten wears your
+/// colour on the globe, and the rim shows how far round each continent you've
+/// got. Spin, and the globe whirls like a lazy Susan, lands on a cuisine
+/// nobody eating has tried, and shows who serves it near you.
 struct GlobeScreen: View {
     @Environment(AppModel.self) private var app
     @Environment(\.colorScheme) private var scheme
 
     @State private var selected: String?
     @State private var focus: GlobeCanvas.FocusRequest?
-    @State private var flying = false
-    @State private var sheet: GlobeSheet?
-    @State private var viewingMemory: Memory?
-    @State private var friendStamps: [String: [Stamp]] = [:]
+    @State private var spinning = false
+    /// Where the last spin landed, until it's tasted or spun again.
+    @State private var landed: String?
+    /// The ghost stamp that drops onto the plate when a spin lands.
+    @State private var dropped: String?
+    /// Who's eating: nil for just you, or a table.
+    @State private var eatingWith: UUID?
+    @State private var sheet: Sheet?
 
-    enum GlobeSheet: Identifiable {
+    enum Sheet: Identifiable {
         case search
-        case addMemory(country: String?)
         case logMeal(cuisine: String?)
-        case dinner
-        case importPhotos
-        case checklist
         case cuisines
-        case friendsIn(String)
+        case cuisine(String)
+        case places(code: String, table: UUID?, fromSpin: Bool)
 
         var id: String {
             switch self {
             case .search: "search"
-            case .addMemory(let code): "add-\(code ?? "")"
             case .logMeal(let code): "meal-\(code ?? "")"
-            case .dinner: "dinner"
-            case .importPhotos: "import"
-            case .checklist: "checklist"
             case .cuisines: "cuisines"
-            case .friendsIn(let code): "friends-\(code)"
+            case .cuisine(let code): "cuisine-\(code)"
+            case .places(let code, let table, let spin): "places-\(code)-\(table?.uuidString ?? "")-\(spin)"
             }
         }
     }
 
     private var tint: UIColor { app.me.flatMap { UIColor(hex: $0.color) } ?? Palette.brand }
+    private var table: Group? { eatingWith.flatMap { id in app.groups.first { $0.id == id } } }
+
+    /// Cuisines counted in the headline and rim: yours, or everyone's at the table.
+    private var counted: Set<String> {
+        eatingWith == nil ? app.tastedCodes : app.tasted(by: app.eaters(at: eatingWith))
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            GlobeBackdrop()
+            TableclothBackdrop()
 
-            let tint = self.tint
-            GlobeCanvas(
-                style: GlobeStyle(scheme),
-                color: { code, isSelected in color(for: code, selected: isSelected, tint: tint) },
-                selected: $selected,
-                focusOn: $focus,
-                onFocusLanded: { code in
-                    flying = false
-                    focus = nil
-                    if let code { selected = code }
-                },
-                onLongPress: { code in
-                    sheet = .addMemory(country: code)
-                },
-                isEmphasized: {
-                    app.visitedCodes.contains($0) || app.tastedCodes.contains($0) || app.bucketList.contains($0)
-                }
-            )
-            .ignoresSafeArea()
-            // SceneKit is opaque to VoiceOver: describe the globe and offer
-            // the same jobs through actions (search finds any country).
-            .accessibilityElement()
-            .accessibilityLabel("Globe")
-            .accessibilityValue("\(app.stats.countries) countries visited, \(app.stats.cuisines) cuisines tasted")
-            .accessibilityHint("Use Find a country to open any country's details.")
-            .accessibilityAction(named: "Find a country") { sheet = .search }
-            .accessibilityAction(named: "Log a meal") { sheet = .logMeal(cuisine: nil) }
-            .accessibilityAction(named: "What's for dinner?") { sheet = .dinner }
-            .accessibilityAction(named: "Add a memory") { sheet = .addMemory(country: nil) }
+            VStack(spacing: 0) {
+                header
+                headline
+                    .padding(.top, 4)
+                plate
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                controls
+                    .padding(.bottom, 12)
+            }
+            .padding(.horizontal, Metrics.gutter)
 
-            bottomArea
-        }
-        .overlay(alignment: .top) { header }
-        .animation(.spring(response: 0.36, dampingFraction: 0.86), value: selected)
-        .sheet(item: $sheet) { sheet in
-            switch sheet {
-            case .search:
-                CountrySearchSheet { code in fly(to: code) }
-            case .addMemory(let code):
-                MemoryEditorView(mode: .new(countryCode: code, pickPhotosFirst: code == nil))
-            case .logMeal(let code):
-                MealEditorView(mode: .new(cuisine: code, place: nil))
-            case .dinner:
-                DinnerDiceSheet(people: [], onLanded: { code in fly(to: code) })
-            case .cuisines:
-                NavigationStack { CuisineChecklistView(onDone: { self.sheet = nil }) }
-            case .importPhotos:
-                NavigationStack { PhotoImportView(onDone: { self.sheet = nil }) }
-            case .checklist:
-                NavigationStack { CountryChecklistView(onDone: { self.sheet = nil }) }
-            case .friendsIn(let code):
-                FriendsInCountrySheet(code: code)
+            if let code = selected, !spinning {
+                CuisinePanel(
+                    code: code,
+                    taste: app.tastesByCode[code],
+                    isLanded: code == landed,
+                    friends: friendsWhoHaveHad(code),
+                    onClose: { selected = nil },
+                    onFind: { sheet = .places(code: code, table: eatingWith, fromSpin: false) },
+                    onLog: { sheet = .logMeal(cuisine: code) },
+                    onOpen: { sheet = .cuisine(code) },
+                    onMarkTasted: { Task { await markTasted(code) } }
+                )
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .sheet(item: $viewingMemory) { memory in
-            MemoryDetailView(memory: memory)
+        .animation(.spring(response: 0.36, dampingFraction: 0.86), value: selected)
+        .sheet(item: $sheet, onDismiss: afterSheet) { sheet in
+            switch sheet {
+            case .search:
+                CuisineSearchSheet { code in fly(to: code) }
+            case .logMeal(let code):
+                MealEditorView(mode: .new(cuisine: code, place: nil))
+            case .cuisines:
+                NavigationStack { CuisineChecklistView(onDone: { self.sheet = nil }) }
+            case .cuisine(let code):
+                CuisineSheet(code: code)
+            case .places(let code, let table, let fromSpin):
+                SpinResultSheet(code: code, tableId: table,
+                                onSpinAgain: fromSpin ? { spinAgain() } : nil)
+            }
         }
-        .task(id: selected) { await loadFriends(for: selected) }
-        .onChange(of: app.networkIds) {
-            // Follow/unfollow/join changes who "has been" — drop the cache.
-            friendStamps = [:]
-            Task { await loadFriends(for: selected) }
+        .task(id: eatingWith) {
+            if let eatingWith { await app.refreshPeopleTastes(app.eaters(at: eatingWith)) }
+        }
+        .onChange(of: app.groups) {
+            if let eatingWith, !app.groups.contains(where: { $0.id == eatingWith }) { self.eatingWith = nil }
+        }
+        .onChange(of: app.tastedCodes) {
+            // Tasting tonight's spin ends its waiting colour.
+            if let landed, app.tastedCodes.contains(landed) { self.landed = nil }
         }
         #if DEBUG
         .task {
             let args = ProcessInfo.processInfo.arguments
+            if args.contains("-spin") {
+                try? await Task.sleep(for: .seconds(1.2))
+                spin()
+            }
             if let i = args.firstIndex(of: "-fly"), i + 1 < args.count {
                 try? await Task.sleep(for: .seconds(1.2))
                 fly(to: args[i + 1])
@@ -121,351 +122,358 @@ struct GlobeScreen: View {
     // ── Header ───────────────────────────────────────────────────────────────
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Stampd")
-                    .font(.wordmark)
-                    .foregroundStyle(Color.brand)
-                if app.stats.countries + app.stats.territories + app.stats.cuisines > 0 {
-                    HStack(spacing: 6) {
-                        Image(systemName: "airplane").foregroundStyle(Color.inkSecondary)
-                        Text("\(app.stats.countries)")
-                            .font(.number(.subheadline))
-                            .contentTransition(.numericText())
-                        Text(app.stats.countries == 1 ? "country" : "countries")
-                        Text("·").foregroundStyle(Color.inkTertiary)
-                        Image(systemName: "fork.knife").foregroundStyle(Color.inkSecondary)
-                        Text("\(app.stats.cuisines)")
-                            .font(.number(.subheadline))
-                            .contentTransition(.numericText())
-                        Text(app.stats.cuisines == 1 ? "cuisine" : "cuisines")
-                    }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.ink)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 7)
-                    .background(.regularMaterial, in: Capsule())
-                    .overlay(Capsule().strokeBorder(Color.hairline.opacity(0.6), lineWidth: 0.5))
-                    .accessibilityElement(children: .combine)
-                    .animation(.snappy, value: app.stats.countries + app.stats.cuisines)
-                }
-            }
+        HStack {
+            Text("Stampd")
+                .font(.wordmark)
+                .foregroundStyle(Color.brand)
             Spacer()
-            VStack(spacing: 10) {
-                FloatingIconButton(systemImage: "magnifyingglass", label: "Find a country") {
-                    sheet = .search
-                }
-                Menu {
-                    Button { sheet = .dinner } label: {
-                        Label("What's for dinner?", systemImage: "fork.knife")
-                    }
-                    Button { spin(bucketOnly: false) } label: {
-                        Label("Where next? (travel)", systemImage: "airplane")
-                    }
-                    Button { spin(bucketOnly: true) } label: {
-                        Label("From my bucket list", systemImage: "bookmark")
-                    }
-                    .disabled(app.bucketList.subtracting(app.visitedCodes).isEmpty)
-                } label: {
-                    Image(systemName: "dice")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(Color.ink)
-                        .frame(width: 46, height: 46)
-                        .background(.regularMaterial, in: Circle())
-                        .overlay(Circle().strokeBorder(Color.hairline.opacity(0.6), lineWidth: 0.5))
-                        .shadow(color: .black.opacity(0.10), radius: 6, y: 3)
-                        .symbolEffect(.bounce, value: flying)
-                } primaryAction: {
-                    sheet = .dinner
-                }
-                .disabled(flying)
-                .accessibilityLabel("What's for dinner? Roll a cuisine")
-                .accessibilityHint("Hold for travel ideas.")
-            }
+            FloatingIconButton(systemImage: "magnifyingglass", label: "Find a cuisine") { sheet = .search }
         }
-        .padding(.horizontal, Metrics.gutter)
         .padding(.top, 6)
     }
 
-    // ── Bottom: panel, first-run card, or hint + add ─────────────────────────
-
-    @ViewBuilder private var bottomArea: some View {
-        if let code = selected, let country = CountryStore.byCode[code] {
-            CountryPanel(
-                country: country,
-                stamp: app.stampsByCode[code],
-                taste: app.tastesByCode[code],
-                memories: ((app.memoriesByCountry[code] ?? []) + (app.mealsByCountry[code] ?? []))
-                    .sorted { ($0.date, $0.createdAt) > ($1.date, $1.createdAt) },
-                isBucketListed: app.bucketList.contains(code),
-                isHome: app.me?.homeCountry == code,
-                friends: friendsWhoHaveBeen(code),
-                onClose: { selected = nil },
-                onAddMemory: { sheet = .addMemory(country: code) },
-                onLogMeal: { sheet = .logMeal(cuisine: Cuisine.isCuisine(code) ? code : nil) },
-                onStamp: { stamp(code) },
-                onToggleBucket: { app.toggleBucketList(code) },
-                onOpenMemory: { viewingMemory = $0 },
-                onShowFriends: { sheet = .friendsIn(code) },
-                onRemoveStamp: { Task { await removeStamp(code) } },
-                onRemoveTaste: {
-                    Task {
-                        do { try await app.removeTaste(code) } catch { app.show(error) }
-                    }
-                }
-            )
-            .padding(.horizontal, 12)
-            .padding(.bottom, 10)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-        } else {
-            VStack(spacing: 12) {
-                if case .failed(let message) = app.loadState {
-                    HStack(spacing: 10) {
-                        Image(systemName: "wifi.exclamationmark").foregroundStyle(Color.stampRed)
-                        Text(message)
-                            .font(.subheadline)
-                            .foregroundStyle(Color.ink)
-                            .lineLimit(2)
-                        Spacer(minLength: 4)
-                        Button("Retry") {
-                            Task { await app.bootstrap() }
-                        }
-                        .buttonStyle(.capsuleProminent)
-                    }
-                    .card(padding: 12)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-                if app.loadState == .loaded && app.stamps.isEmpty && app.memories.isEmpty
-                    && app.tastes.isEmpty && app.meals.isEmpty {
-                    BuildPassportCard(
-                        onScan: { sheet = .importPhotos },
-                        onPick: { sheet = .checklist }
-                    )
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                } else {
-                    HStack(alignment: .bottom) {
-                        if app.stamps.count + app.tastes.count < 4 && !flying {
-                            Label("Tap a country · + to log a meal", systemImage: "hand.tap")
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(Color.inkSecondary)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(.regularMaterial, in: Capsule())
-                                .transition(.opacity)
-                        }
-                        Spacer()
-                        addMenu
-                    }
-                }
+    private var headline: some View {
+        let count = counted.count
+        return VStack(spacing: 3) {
+            Eyebrow(text: table.map { "Between \($0.name)" } ?? "You've eaten", color: .inkSecondary)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(FoodStats.percentText(count))
+                    .font(.system(size: 46, weight: .semibold, design: .serif))
+                    .foregroundStyle(Color(uiColor: tint))
+                    .contentTransition(.numericText())
+                Text("of the world")
+                    .font(.displaySmall)
+                    .foregroundStyle(Color.ink)
             }
-            .padding(.horizontal, Metrics.gutter)
-            .padding(.bottom, 14)
+            if case .failed(let message) = app.loadState {
+                Button {
+                    Task { await app.bootstrap() }
+                } label: {
+                    Label("\(message) Tap to retry.", systemImage: "wifi.exclamationmark")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Color.stampRed)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+            } else if app.loadState == .loaded, app.tastes.isEmpty, eatingWith == nil {
+                Button { sheet = .cuisines } label: {
+                    Text("Eaten around already? \(Text("Mark what you've tried").foregroundStyle(Color.brand).bold())")
+                        .font(.caption)
+                        .foregroundStyle(Color.inkSecondary)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text("\(count.counted("cuisine")) of \(Cuisine.codes.count)\(eatingWith == nil ? " · \(app.stats.meals.counted("meal"))" : "")")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.inkSecondary)
+                    .contentTransition(.numericText())
+            }
+        }
+        .multilineTextAlignment(.center)
+        .animation(.snappy, value: count)
+        .accessibilityElement(children: .combine)
+    }
+
+    // ── The plate ────────────────────────────────────────────────────────────
+
+    private var plate: some View {
+        let tint = self.tint
+        let others = eatingWith == nil ? Set<String>() : counted.subtracting(app.tastedCodes)
+        let landed = self.landed
+        return ZStack {
+            Plate(rim: 0.15, band: .clear) {
+                GlobeCanvas(
+                    style: GlobeStyle(scheme),
+                    color: { code, isSelected in
+                        color(for: code, selected: isSelected, tint: tint, others: others, landed: landed)
+                    },
+                    selected: $selected,
+                    focusOn: $focus,
+                    onFocusLanded: landedOn,
+                    onLongPress: { code in
+                        if Cuisine.isCuisine(code) { sheet = .logMeal(cuisine: code) }
+                    },
+                    isEmphasized: { app.tastedCodes.contains($0) || $0 == landed || others.contains($0) },
+                    landingBias: 0.04,
+                    fitMargin: 1.05
+                )
+                // SceneKit is opaque to VoiceOver: describe the globe and
+                // offer its jobs as actions.
+                .accessibilityElement()
+                .accessibilityLabel("Globe")
+                .accessibilityValue("\(app.stats.cuisines) cuisines eaten, \(app.stats.worldPercentText) of the world")
+                .accessibilityAction(named: "Spin for dinner") { spin() }
+                .accessibilityAction(named: "Find a cuisine") { sheet = .search }
+                .accessibilityAction(named: "Log a meal") { sheet = .logMeal(cuisine: nil) }
+            }
+            ContinentRim(progress: FoodStats.continentProgress(counted), tint: Color(uiColor: tint))
+
+            if let dropped {
+                SpinCoaster(code: dropped, size: 176)
+                    .transition(.scale(scale: 1.8).combined(with: .opacity))
+                    .allowsHitTesting(false)
+            }
         }
     }
 
-    private var addMenu: some View {
+    private func color(for code: String, selected isSelected: Bool, tint: UIColor,
+                       others: Set<String>, landed: String?) -> UIColor {
+        let style = GlobeStyle(scheme)
+        if app.tastedCodes.contains(code) {
+            return style.tasted(tint, meals: app.mealsByCountry[code]?.count ?? 0, selected: isSelected)
+        }
+        if code == landed { return style.landed(selected: isSelected) }
+        if others.contains(code) { return style.tastedByOthers(style.shared, selected: isSelected) }
+        return style.untouched(selected: isSelected)
+    }
+
+    // ── Controls ─────────────────────────────────────────────────────────────
+
+    private var controls: some View {
+        ZStack {
+            HStack(alignment: .center) {
+                whoIsEating
+                Spacer(minLength: 0)
+                logButton
+            }
+            SpinButton(spinning: spinning, size: 84) { spin() }
+                .disabled(spinning)
+                .accessibilityLabel(table.map { "Spin for \($0.name)" } ?? "Spin for dinner")
+                .accessibilityHint("Lands on a cuisine nobody eating has tried, then shows restaurants near you.")
+        }
+    }
+
+    private var whoIsEating: some View {
         Menu {
-            Button { sheet = .logMeal(cuisine: nil) } label: {
-                Label("Log a meal", systemImage: "fork.knife")
+            Button { eatingWith = nil } label: {
+                Label("Just me", systemImage: eatingWith == nil ? "checkmark" : "person")
             }
-            Button { sheet = .addMemory(country: nil) } label: {
-                Label("Add a travel memory", systemImage: "airplane")
-            }
-            Divider()
-            Button { sheet = .cuisines } label: {
-                Label("Mark cuisines I've tried", systemImage: "checklist")
-            }
-            Button { sheet = .importPhotos } label: {
-                Label("Find trips in my photos", systemImage: "sparkle.magnifyingglass")
-            }
-            Button { sheet = .checklist } label: {
-                Label("Mark countries I've been to", systemImage: "globe")
+            if !app.groups.isEmpty {
+                Section("A table") {
+                    ForEach(app.groups) { group in
+                        Button { eatingWith = group.id } label: {
+                            Label("\(group.name) · \(app.members(of: group.id).count)",
+                                  systemImage: eatingWith == group.id ? "checkmark" : "person.3")
+                        }
+                    }
+                }
             }
         } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(Color.onBrand)
-                .frame(width: 60, height: 60)
-                .background(Color.brand, in: Circle())
-                .shadow(color: .black.opacity(0.22), radius: 10, y: 4)
+            HStack(spacing: 7) {
+                if let table {
+                    AvatarStack(profiles: app.members(of: table.id).compactMap { app.profile($0) }, size: 22, max: 3)
+                } else {
+                    AvatarView(profile: app.me, size: 26)
+                }
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Spinning for")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color.inkTertiary)
+                        .fixedSize()
+                    Text(table?.name ?? "Just me")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.ink)
+                        .lineLimit(1)
+                }
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color.inkTertiary)
+            }
+            .padding(.leading, 6)
+            .padding(.trailing, 10)
+            .padding(.vertical, 6)
+            .background(.regularMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.hairline.opacity(0.6), lineWidth: 0.5))
+            .frame(maxWidth: 136, alignment: .leading)
+        }
+        .disabled(spinning)
+        .accessibilityLabel("Spinning for \(table?.name ?? "just you")")
+    }
+
+    private var logButton: some View {
+        Menu {
+            Button { sheet = .logMeal(cuisine: nil) } label: { Label("Log a meal", systemImage: "fork.knife") }
+            Button { sheet = .cuisines } label: { Label("Mark cuisines I've tried", systemImage: "checklist") }
+        } label: {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: "fork.knife")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(Color.brand)
+                    .frame(width: 56, height: 56)
+                    .background(Color.card, in: Circle())
+                    .overlay(Circle().strokeBorder(Color.brand.opacity(0.35), lineWidth: 1.5))
+                    .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .heavy))
+                    .foregroundStyle(Color.onBrand)
+                    .frame(width: 20, height: 20)
+                    .background(Color.brand, in: Circle())
+                    .offset(x: 2, y: -2)
+            }
         } primaryAction: {
             sheet = .logMeal(cuisine: nil)
         }
         .accessibilityLabel("Log a meal")
-        .accessibilityHint("Hold for travel memories and more.")
+        .accessibilityHint("Hold for more.")
     }
 
     // ── Actions ──────────────────────────────────────────────────────────────
 
-    private func color(for code: String, selected isSelected: Bool, tint: UIColor) -> UIColor {
-        let style = GlobeStyle(scheme)
-        if app.visitedCodes.contains(code) {
-            return style.visited(tint, memories: app.memoriesByCountry[code]?.count ?? 0, selected: isSelected)
-        }
-        if app.tastedCodes.contains(code) { return style.tasted(tint, selected: isSelected) }
-        if app.bucketList.contains(code) { return style.bucketListed(selected: isSelected) }
-        return style.untouched(selected: isSelected)
-    }
-
-    private func spin(bucketOnly: Bool) {
-        let pool = CountryStore.all.filter { country in
-            !app.visitedCodes.contains(country.code)
-                && (!bucketOnly || app.bucketList.contains(country.code))
-        }
-        guard let pick = pool.randomElement() else {
-            app.celebrate(bucketOnly ? "Your bucket list is all stamped. Add more!" : "You've been everywhere. Legend.")
-            return
-        }
+    private func spin() {
+        guard !spinning, let pick = app.spinPool(for: eatingWith).randomElement() else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         selected = nil
-        flying = true
-        focus = .init(id: UUID(), code: pick.code, style: .spin)
-        app.backend.logEvent("globe_spun", props: ["bucket_only": String(bucketOnly)])
+        landed = nil
+        withAnimation(.easeOut(duration: 0.2)) { dropped = nil }
+        spinning = true
+        focus = .init(id: UUID(), code: pick, style: .spin)
+        app.backend.logEvent("globe_spun", props: ["table": String(eatingWith != nil)])
+    }
+
+    private func spinAgain() {
+        sheet = nil
+        Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            spin()
+        }
+    }
+
+    private func landedOn(_ code: String?) {
+        focus = nil
+        let wasSpin = spinning
+        spinning = false
+        guard let code else { return }   // grabbed mid-flight
+        guard wasSpin else {
+            selected = code
+            return
+        }
+        landed = code
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.58)) { dropped = code }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        Task {
+            try? await Task.sleep(for: .milliseconds(1150))
+            guard landed == code, dropped == code else { return }
+            sheet = .places(code: code, table: eatingWith, fromSpin: true)
+            try? await Task.sleep(for: .milliseconds(500))
+            withAnimation(.easeOut(duration: 0.25)) { dropped = nil }
+        }
+    }
+
+    /// Back from a spin's restaurants: tonight's pick stays open on the globe.
+    private func afterSheet() {
+        if let landed, selected == nil, !spinning, focus == nil { selected = landed }
     }
 
     private func fly(to code: String) {
         guard CountryStore.byCode[code] != nil else { return }
         selected = nil
-        flying = true
         focus = .init(id: UUID(), code: code, style: .fly)
     }
 
-    private func stamp(_ code: String) {
-        Task {
-            do {
-                let wasNew = !app.visitedCodes.contains(code)
-                try await app.addStamps([StampInput(countryCode: code, firstVisited: nil,
-                                                    lastVisited: nil, source: .manual)])
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-                if wasNew, let name = CountryStore.byCode[code]?.name {
-                    app.celebrate("\(Country.flag(for: code)) \(name) stamped")
-                }
-            } catch {
-                app.show(error)
-            }
-        }
-    }
-
-    private func removeStamp(_ code: String) async {
+    private func markTasted(_ code: String) async {
         do {
-            try await app.removeStamp(code)
+            try await app.addTastes([code])
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            app.celebrate("\(Country.flag(for: code)) \(Cuisine.name(for: code)) — tasted")
         } catch {
             app.show(error)
         }
     }
 
-    private func friendsWhoHaveBeen(_ code: String) -> [Profile] {
-        (friendStamps[code] ?? []).compactMap { app.profile($0.userId) }
-            .filter { !app.blocked.contains($0.id) }
+    private func friendsWhoHaveHad(_ code: String) -> [Profile] {
+        app.networkIds
+            .filter { app.peopleTastes[$0]?.contains(code) == true }
+            .compactMap { app.profile($0) }
             .sorted { $0.name < $1.name }
-    }
-
-    private func loadFriends(for code: String?) async {
-        guard let code, friendStamps[code] == nil else { return }
-        let ids = Array(app.networkIds)
-        guard !ids.isEmpty, let found = try? await app.backend.stamps(countryCode: code, userIds: ids) else { return }
-        _ = await app.profiles(for: found.map(\.userId))
-        friendStamps[code] = found
     }
 }
 
 // ── Backdrop ────────────────────────────────────────────────────────────────
 
-private struct GlobeBackdrop: View {
+/// Paper, with the faintest weave — the cloth the plate is set on.
+struct TableclothBackdrop: View {
     var body: some View {
-        GeometryReader { proxy in
-            let side = min(proxy.size.width, proxy.size.height)
-            ZStack {
-                Color.paper
-                RadialGradient(colors: [Color.card.opacity(0.9), Color.paper.opacity(0)],
-                               center: .center, startRadius: side * 0.1, endRadius: side * 0.85)
+        ZStack {
+            Color.paper
+            Canvas { context, size in
+                let ink = GraphicsContext.Shading.color(Color.hairline.opacity(0.35))
+                var path = Path()
+                var x = 0.0
+                while x < size.width {
+                    path.move(to: CGPoint(x: x, y: 0))
+                    path.addLine(to: CGPoint(x: x, y: size.height))
+                    x += 6
+                }
+                var y = 0.0
+                while y < size.height {
+                    path.move(to: CGPoint(x: 0, y: y))
+                    path.addLine(to: CGPoint(x: size.width, y: y))
+                    y += 6
+                }
+                context.stroke(path, with: ink, lineWidth: 0.3)
             }
+            RadialGradient(colors: [Color.paper.opacity(0), Color.paper.opacity(0.85)],
+                           center: .center, startRadius: 120, endRadius: 520)
         }
         .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
-// ── First run ───────────────────────────────────────────────────────────────
+// ── A cuisine, tapped on the globe ──────────────────────────────────────────
 
-struct BuildPassportCard: View {
-    let onScan: () -> Void
-    let onPick: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Build your passport")
-                    .font(.displayXSmall)
-                    .foregroundStyle(Color.ink)
-                Text("Find the countries you've been to in your photos — it takes a few seconds and happens on your phone.")
-                    .font(.subheadline)
-                    .foregroundStyle(Color.inkSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            HStack(spacing: 10) {
-                Button(action: onScan) {
-                    Label("Scan photos", systemImage: "sparkle.magnifyingglass")
-                }
-                .buttonStyle(.primary)
-                Button(action: onPick) {
-                    Label("Pick", systemImage: "checklist")
-                }
-                .buttonStyle(SecondaryButtonStyle(fullWidth: false))
-            }
-        }
-        .card()
-    }
-}
-
-// ── Country panel ───────────────────────────────────────────────────────────
-
-struct CountryPanel: View {
-    let country: Country
-    let stamp: Stamp?
-    var taste: Taste?
-    let memories: [Memory]
-    let isBucketListed: Bool
-    let isHome: Bool
+struct CuisinePanel: View {
+    let code: String
+    let taste: Taste?
+    var isLanded = false
     let friends: [Profile]
     let onClose: () -> Void
-    let onAddMemory: () -> Void
-    var onLogMeal: () -> Void = {}
-    let onStamp: () -> Void
-    let onToggleBucket: () -> Void
-    let onOpenMemory: (Memory) -> Void
-    let onShowFriends: () -> Void
-    let onRemoveStamp: () -> Void
-    var onRemoveTaste: () -> Void = {}
+    let onFind: () -> Void
+    let onLog: () -> Void
+    let onOpen: () -> Void
+    let onMarkTasted: () -> Void
 
-    @State private var confirmRemove = false
-
-    private var visited: Bool { stamp != nil }
+    private var country: Country? { CountryStore.byCode[code] }
+    private var hasKitchen: Bool { Cuisine.isCuisine(code) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 12) {
-                FlagTile(code: country.code, size: 50)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(country.name)
-                        .font(.displayXSmall)
-                        .foregroundStyle(Color.ink)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                    statusLine
-                }
-                Spacer(minLength: 4)
-                Button(action: onToggleBucket) {
-                    Image(systemName: isBucketListed ? "bookmark.fill" : "bookmark")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(isBucketListed ? Color.bucket : Color.inkSecondary)
-                        .frame(width: 38, height: 38)
-                        .background(Color.sunken, in: Circle())
+            HStack(alignment: .top, spacing: 14) {
+                Button(action: onOpen) {
+                    StampBadge(code: code, subtitle: taste?.yearsText, size: 84, inked: taste != nil, tasted: true)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(isBucketListed ? "Remove from bucket list" : "Add to bucket list")
+                .disabled(!hasKitchen)
+                .accessibilityLabel("Open \(Cuisine.name(for: code)) food")
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(hasKitchen ? Cuisine.name(for: code) : country?.name ?? code)
+                        .font(.displaySmall)
+                        .foregroundStyle(Color.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    if let country {
+                        Text("\(country.flag) \(country.name) · \(country.continent.rawValue)")
+                            .font(.caption)
+                            .foregroundStyle(Color.inkSecondary)
+                            .lineLimit(1)
+                    }
+                    status
+                    if !friends.isEmpty {
+                        HStack(spacing: 6) {
+                            FacePile(profiles: friends, size: 20, limit: 3)
+                            Text(friendsText)
+                                .font(.caption)
+                                .foregroundStyle(Color.inkSecondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
                 Button(action: onClose) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(Color.inkSecondary)
                         .frame(width: 30, height: 30)
                         .background(Color.sunken, in: Circle())
@@ -474,216 +482,95 @@ struct CountryPanel: View {
                 .accessibilityLabel("Close")
             }
 
-            if !memories.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(memories.prefix(12)) { memory in
-                            Button { onOpenMemory(memory) } label: {
-                                VStack(alignment: .leading, spacing: 5) {
-                                    MemoryTile(memory: memory, showTitle: false)
-                                        .frame(width: 96, height: 96)
-                                    Text(memory.displayTitle)
-                                        .font(.caption.weight(.medium))
-                                        .foregroundStyle(Color.ink)
-                                        .lineLimit(1)
-                                        .frame(width: 96, alignment: .leading)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-            }
-
-            if !friends.isEmpty {
-                Button(action: onShowFriends) {
-                    HStack(spacing: 10) {
-                        FacePile(profiles: friends, size: 26)
-                        Text(friendsText)
-                            .font(.subheadline)
-                            .foregroundStyle(Color.ink)
-                            .lineLimit(1)
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(Color.inkTertiary)
-                    }
-                    .padding(10)
-                    .background(Color.sunken.opacity(0.7), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                }
-                .buttonStyle(.plain)
-            }
-
-            HStack(spacing: 10) {
-                // Eating is the everyday stamp; it leads wherever the country
-                // has a cuisine to taste.
-                if Cuisine.isCuisine(country.code) {
-                    Button(action: onLogMeal) {
-                        Label("Log a meal", systemImage: "fork.knife")
+            if hasKitchen {
+                HStack(spacing: 10) {
+                    Button(action: onFind) {
+                        Label("Find it near me", systemImage: "map")
                     }
                     .buttonStyle(.primary)
-                }
-                if !visited {
-                    Button(action: onStamp) {
-                        Label("Been here", systemImage: "checkmark.seal")
+                    Button(action: onLog) {
+                        Image(systemName: "fork.knife")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Color.brand)
+                            .frame(width: 50, height: 50)
+                            .background(Color.brandSoft, in: Circle())
                     }
-                    .buttonStyle(SecondaryButtonStyle(fullWidth: !Cuisine.isCuisine(country.code)))
-                }
-                Menu {
-                    Button(action: onAddMemory) {
-                        Label("Add a travel memory", systemImage: "airplane")
-                    }
-                    if visited {
-                        Button(role: .destructive) { confirmRemove = true } label: {
-                            Label("Remove visited stamp", systemImage: "minus.circle")
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Log \(Cuisine.withArticle(code)) meal")
+                    Menu {
+                        Button(action: onOpen) { Label("\(Cuisine.name(for: code)) food", systemImage: "book") }
+                        if taste == nil {
+                            Button(action: onMarkTasted) { Label("I've had it", systemImage: "checkmark.seal") }
                         }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(Color.ink)
+                            .frame(width: 50, height: 50)
+                            .background(Color.sunken, in: Circle())
                     }
-                    if taste != nil {
-                        Button(role: .destructive, action: onRemoveTaste) {
-                            Label("Remove tasted stamp", systemImage: "fork.knife.circle")
-                        }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(Color.ink)
-                        .frame(width: 50, height: 50)
-                        .background(Color.sunken, in: Circle())
+                    .accessibilityLabel("More")
                 }
-                .accessibilityLabel("More")
             }
         }
         .padding(16)
-        .background(Color.card, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous)
+        .background {
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(Color.card)
+                .overlay(alignment: .top) {
+                    // A menu card's scalloped header edge.
+                    ScallopEdge().fill(Color.brand.opacity(0.1)).frame(height: 10).padding(.horizontal, 22)
+                }
+        }
+        .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous)
             .strokeBorder(Color.hairline.opacity(0.7), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.16), radius: 20, y: 6)
-        .confirmationDialog("Remove \(country.name) from your passport?", isPresented: $confirmRemove,
-                            titleVisibility: .visible) {
-            Button("Remove stamp", role: .destructive, action: onRemoveStamp)
-        } message: {
-            Text(memories.isEmpty ? "You can stamp it again anytime." : "Delete the memories from here first.")
-        }
     }
 
-    @ViewBuilder private var statusLine: some View {
-        HStack(spacing: 6) {
-            if isHome {
-                Pill(systemImage: "house.fill", text: "Home", tint: .brand, background: .brandSoft)
-            }
-            if let stamp {
-                Pill(systemImage: "checkmark.seal.fill",
-                     text: stamp.yearsText.map { "Visited \($0)" } ?? "Visited",
-                     tint: .brand, background: .brandSoft)
-            }
-            if let taste {
-                Pill(systemImage: "fork.knife",
-                     text: taste.meals > 0 ? "Tasted · \(taste.meals.counted("meal"))" : "Tasted",
-                     tint: .brand, background: .brandSoft)
-            }
-            if stamp != nil || taste != nil {
-                EmptyView()
-            } else if isBucketListed {
-                Pill(systemImage: "bookmark.fill", text: "Bucket list", tint: .bucket, background: .bucketSoft)
-            } else {
-                Text(country.isSovereign ? country.continent.rawValue : "Territory · \(country.continent.rawValue)")
-                    .font(.caption)
-                    .foregroundStyle(Color.inkSecondary)
-            }
-            if stamp == nil || taste == nil, !memories.isEmpty {
-                Text(memories.count.counted("memory", "memories"))
-                    .font(.caption)
-                    .foregroundStyle(Color.inkSecondary)
-            }
+    @ViewBuilder private var status: some View {
+        if let taste {
+            Pill(systemImage: "fork.knife",
+                 text: taste.meals > 0 ? "Tasted · \(taste.meals.counted("meal"))" : "Tasted",
+                 tint: .brand, background: .brandSoft)
+        } else if !hasKitchen {
+            Text("No kitchen to taste here.")
+                .font(.caption)
+                .foregroundStyle(Color.inkSecondary)
+        } else if isLanded {
+            Pill(systemImage: "dice", text: "Tonight's spin", tint: .saffron, background: .saffronSoft)
+        } else {
+            Text("Not tried yet")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.inkSecondary)
         }
-        .lineLimit(1)
     }
 
     private var friendsText: String {
         let names = friends.map(\.firstName)
         switch names.count {
-        case 1: return "\(names[0]) has been here"
-        case 2: return "\(names[0]) and \(names[1]) have been"
-        default: return "\(names[0]), \(names[1]) +\(names.count - 2) have been"
+        case 1: return "\(names[0]) has had it"
+        case 2: return "\(names[0]) and \(names[1]) have had it"
+        default: return "\(names[0]), \(names[1]) +\(names.count - 2) have had it"
         }
     }
 }
 
-/// Friends who've been somewhere, and what they saw.
-struct FriendsInCountrySheet: View {
-    let code: String
+/// A row of half-moons, like the edge of a menu card or a paper doily.
+struct ScallopEdge: Shape {
+    var scallop: CGFloat = 12
 
-    @Environment(AppModel.self) private var app
-    @Environment(\.dismiss) private var dismiss
-    @State private var stamps: [Stamp] = []
-    @State private var memories: [Memory] = []
-    @State private var viewing: Memory?
-    @State private var loaded = false
-
-    private var country: Country? { CountryStore.byCode[code] }
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    ForEach(stamps.sorted { ($0.lastVisited ?? "") > ($1.lastVisited ?? "") }) { stamp in
-                        if let person = app.profile(stamp.userId) {
-                            let theirs = memories.filter { $0.userId == person.id }
-                            VStack(alignment: .leading, spacing: 10) {
-                                NavigationLink {
-                                    ProfileView(userId: person.id)
-                                } label: {
-                                    HStack(spacing: 10) {
-                                        AvatarView(profile: person, size: 40)
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(person.name).font(.headline).foregroundStyle(Color.ink)
-                                            Text(stamp.yearsText.map { "Visited \($0)" } ?? "Has been here")
-                                                .font(.caption)
-                                                .foregroundStyle(Color.inkSecondary)
-                                        }
-                                        Spacer()
-                                        Image(systemName: "chevron.right")
-                                            .font(.caption.weight(.bold))
-                                            .foregroundStyle(Color.inkTertiary)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                if !theirs.isEmpty {
-                                    ScrollView(.horizontal, showsIndicators: false) {
-                                        HStack(spacing: 10) {
-                                            ForEach(theirs) { memory in
-                                                Button { viewing = memory } label: {
-                                                    MemoryTile(memory: memory).frame(width: 140, height: 140)
-                                                }
-                                                .buttonStyle(.plain)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            .card(padding: 14)
-                        }
-                    }
-                    if loaded && stamps.isEmpty {
-                        EmptyStateView(systemImage: "person.2", title: "No friends here yet",
-                                       message: "When people you follow stamp \(country?.name ?? "this country"), they'll show up here.")
-                            .padding(.top, 40)
-                    }
-                }
-                .padding(Metrics.gutter)
-            }
-            .paperBackground()
-            .navigationTitle("\(country?.flag ?? "") \(country?.name ?? code)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
-            .sheet(item: $viewing) { MemoryDetailView(memory: $0) }
-            .task {
-                let ids = Array(app.networkIds)
-                stamps = (try? await app.backend.stamps(countryCode: code, userIds: ids)) ?? []
-                _ = await app.profiles(for: stamps.map(\.userId))
-                memories = (try? await app.backend.memories(countryCode: code, userIds: stamps.map(\.userId))) ?? []
-                loaded = true
-            }
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let count = max(1, Int(rect.width / scallop))
+        let width = rect.width / CGFloat(count)
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        for index in 0..<count {
+            let x = rect.minX + CGFloat(index) * width
+            path.addArc(center: CGPoint(x: x + width / 2, y: rect.minY), radius: width / 2,
+                        startAngle: .degrees(180), endAngle: .degrees(0), clockwise: true)
         }
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.closeSubpath()
+        return path
     }
 }

@@ -1,15 +1,18 @@
 # Stampd — iOS
 
-**Eat your way around the world — and stamp the places you actually go.**
-Every country has two stamps: Tasted (you ate its food) and Visited (you
-went). Food is the weekly habit; travel is the big moment; one passport.
+**How much of the world have you eaten?** Every cuisine you taste gets a stamp
+and fills in your globe. When nobody can decide what's for dinner, spin the
+globe: it lands on a cuisine nobody at your table has had, then shows who
+serves it near you.
 
 Native SwiftUI, iOS 17+. Backend is the shared Supabase project whose schema
 lives in the web repo (`../culinary-passport/supabase/migrations`). The repo,
-target and bundle id still say *CulinaryPassport*: the app pivoted to travel on
-2026-09-17 ([`docs/TRAVEL-PIVOT.md`](docs/TRAVEL-PIVOT.md)) and brought food back
-as the everyday half on 2026-09-21 — travel alone is a few trips a year, too
-rare to become a habit. Those identifiers are wired into Supabase auth redirects.
+target and bundle id still say *CulinaryPassport* — those identifiers are wired
+into Supabase auth redirects. The app went through a travel phase (2026-09-17,
+[`docs/TRAVEL-PIVOT.md`](docs/TRAVEL-PIVOT.md)) and came back to food: first as
+the weekly half of a two-stamp passport (2026-09-21), and since 2026-09-22 as
+the whole app. Travel is a few trips a year, too rare to be a habit; dinner is
+every day.
 
 ## Run it
 
@@ -24,70 +27,59 @@ Supabase URL + anon key.
 
 **No account needed to explore:** launch with `-uiPreview` (or tap *Explore with
 demo data* on the sign-in screen in Debug builds). Every screen runs on
-`DemoBackend` — a believable cast with passports, memories, groups and chat,
-and generated postcard photos. Nothing touches the network.
+`DemoBackend` — a cast in and around San Francisco with meals, tastes, three
+tables and their dinner talk, and generated plate photos. Nothing touches the
+network except Apple Maps restaurant search.
 
 Debug launch arguments (Debug builds only):
 
 | argument | effect |
 | --- | --- |
 | `-uiPreview` | demo backend, signed in as Alex |
-| `-tab globe\|friends\|groups\|passport` | open on a tab |
-| `-open editor\|meal\|dinner\|cuisines\|cuisine\|import\|checklist\|wrapped\|settings\|memory\|trip\|plan\|country\|share\|stamp\|burst` | present a screen (`-code GE` picks the country/cuisine) |
-| `-page visited\|tasted\|trips\|map` | open the Passport on a section |
+| `-tab globe\|tables\|me` | open on a tab |
+| `-table club` | open the Friday Dinner Club table (or pass a group id) |
+| `-spin` | spin as soon as the globe (or a table) is on screen |
+| `-open meal\|detail\|settings\|cuisine\|cuisines\|spin\|tablespin\|share\|stamp\|burst` | present a screen (`-code ET` picks the cuisine) |
 | `-onboarding` | force the first-run flow |
-| `-fly JP` | fly the globe to a country |
+| `-fly JP` | fly the globe to a cuisine |
 
 Tests: `xcodebuild test -scheme CulinaryPassport -destination 'platform=iOS Simulator,name=iPhone 17 Pro'`
-(geometry, travel stats, trips, photo-location lookup, reminders, input
-hygiene, and the app model against the demo backend).
+(globe geometry, where a restaurant is, cuisines and dishes, how-much-of-the-world
+stats, table spins, dinner picks, and the app model against the demo backend).
 
 ## The product
 
 | Tab | What it's for |
 | --- | --- |
-| **Globe** | Countries you've visited in your colour, cuisines you've tasted in a lighter wash of it, bucket list in amber. **+** logs a meal (hold for a travel memory). The dice rolls dinner: a cuisine you haven't tried and who serves it near you (hold for travel ideas). Tap a country for its meals, memories and who's been. |
-| **Friends** | Meals and memories from people you follow and your groups, a *New stamps* strip, Discover (public), activity, find people. Save any friend's meal as a restaurant to try. |
-| **Groups** | A shared globe per group, leaderboard, and a chat — share memories, 🎲 *what should we eat?* (a cuisine none of you has tried) or *where should we go?* |
-| **Passport** | The booklet: cover, data page, then Visited and Tasted stamp pages. Trips — planned and been — a map, Year in Travel, settings. Each cuisine has a page: your meals, restaurants you've saved, where friends ate it, who serves it nearby. |
+| **Globe** | The world served on a plate. Cuisines you've eaten wear your colour; the rim shows each continent, inked as far round as you've got. **Spin** whirls the globe like a lazy Susan and lands on a cuisine you haven't tried — or, *spinning for* a table, one none of you has — then shows restaurants near you on a round map, each on a ticket (directions, save, suggest to a table, "I ate here"). Tap a country for its cuisine; **🍴+** logs a meal. |
+| **Tables** | Your groups as a floor plan of round tables, everyone seated at theirs. A table has its own globe on a lazy Susan (what you've all had, what some of you have), a spin for the table, and the conversation: messages, shared meals, and dinner picks that people answer with **I'm in**. Friends' latest plates sit underneath, with the full feed, activity and find-people. |
+| **Me** | The food passport: gold-foil cover, data page (home kitchen, cuisines, world %, favourite, machine-readable strip), the world as six continent plates, a yearly goal, a stamp page per nine cuisines, your meals as plates, and restaurants to try. Each cuisine and continent opens to what you've had and what's still waiting. |
 
-### Food: the weekly half
+### A meal, logged
 
-A meal is an `entries` row with kind `meal` — the culinary app's own shape,
-so meals people logged before the travel pivot came back as Tasted stamps.
-Logging one is photo → restaurant → cuisine → what you had: a photo's
-location finds the restaurant (`MKLocalPointsOfInterestRequest`), the
-restaurant's name suggests the cuisine (`Cuisine.suggest`), and a first taste
-plays the stamp moment. `Cuisine` names ~210 cuisines the way people order
-them ("Georgian", "Persian"), maps dishes to them for search ("pho" →
-Vietnamese), and keeps the dice to cuisines a city of any size serves.
+A meal is an `entries` row of kind `meal`. Logging one is a photo on a plate
+and a receipt: the photo's location finds the restaurant
+(`MKLocalPointsOfInterestRequest`), the restaurant's name suggests the cuisine
+(`Cuisine.suggest`), and a first taste plays the stamp moment ("Cuisine Nº 21").
+`Cuisine` names ~210 cuisines the way people order them ("Georgian",
+"Persian"), maps dishes to them for search ("pho" → Vietnamese), and keeps the
+spin to cuisines a city of any size serves.
+
 Deliberately *not* here: ratings and rankings. That's Beli's game; this one is
 about what you haven't tried yet.
 
-Ways into a passport: **scan the photo library**, tick countries on a
-checklist, or add a memory (photos → place and date suggested from the photos'
-metadata → save; a new country plays the stamp moment).
+### The spin
 
-### The camera roll is the backlog
-
-The scan reads photo locations on-device and clusters them into **trips and
-the places inside them** — "Japan & South Korea · 9 days · Tokyo · Kyoto ·
-Seoul" — skipping everyday life near the home it infers from where you shoot
-most days (`PhotoTripBuilder`). Accepting them writes trips and one memory per
-place, **private and photo-less**: nothing is uploaded, nothing reaches a
-feed, and the pictures keep showing from the phone (`LocalMemoryPhotos`) until
-you add them to a memory on purpose. The whole import is undoable in one tap
-(`AppModel.ImportSummary`) from the Trips page.
-
-### Planning is the same object as the log
-
-A **trip** is where you're going, roughly when, who with, and the places
-you've saved for it — a boarding pass with a countdown. Save places from a
-friend's memory, from Discover, or from a map search; each one can be ticked
-off, or turned into a memory with its place already filled in. When the dates
-pass, the memories you posted in that window *are* the trip (`TripPlan.covers`),
-so nothing has to be migrated from "planned" to "been". A trip attached to a
-group is visible to that group, and they can add places to it.
+`AppModel.spinPool(for:)` is every popular cuisine nobody eating has tasted —
+your tastes, or the union of everyone's at a table (`tasted(by:)`), falling
+back to what *you* haven't had once a table has eaten everything. The globe's
+spin eases out like a flicked lazy Susan and clicks (haptics) as it slows;
+where it lands drops a *Tonight* coaster onto the plate, then
+`SpinResultSheet` searches Apple Maps around you (`PlaceSearch.restaurants`,
+region-bound, within 40 km) and marks restaurants where friends have eaten.
+Suggesting one posts a **dinner pick** to the table: a `group_posts` row with
+`cuisine_code` and the restaurant (`place_name`, `place_address`,
+`place_lat/lng`), plus a readable `text` for older clients and pushes.
 
 ## Architecture
 
@@ -95,31 +87,35 @@ group is visible to that group, and they can add places to it.
 CulinaryPassport/
   CulinaryPassportApp.swift   entry: splash, session switch, deep links, password reset
   DesignSystem/               Theme (light/dark tokens, type), Components, RemoteImage
-                              (cached image pipeline), StampBadge, Ticket (boarding
-                              pass, luggage tag, postcard), ImageTools
-  Models/                     Models (Profile, Memory (memories and meals), Stamp, Taste,
-                              Group…), Cuisines (names, dishes, clues, dice), Trips (planned
-                              trips + saved places), Countries (197 countries +
-                              territories), PlaceLocator (photo location → place),
-                              TravelStats (stats, chapters, year review)
+                              (cached image pipeline), StampBadge, Tableware (plate,
+                              continent rim + curved text, gingham, round table, spin
+                              button, meal plates, plate stack), Ticket (ticket, tag,
+                              receipt, postcard), ImageTools
+  Models/                     Models (Profile, Meal, Taste, Group, GroupPost + DinnerPick…),
+                              Cuisines (names, dishes, clues, the spin's pool), FoodStats
+                              (how much of the world, by continent), Restaurants (saved
+                              places), Countries (197 countries + territories),
+                              PlaceLocator (a location → its country)
   Services/
     Backend.swift             protocol for everything the app asks of a server
     SupabaseBackend.swift     live implementation (RLS decides visibility)
-    DemoBackend.swift, DemoData.swift   in-memory fixtures + postcard renderer
+    DemoBackend.swift, DemoData.swift   in-memory fixtures + plate-photo renderer
     AppModel.swift            @Observable single source of truth for the signed-in
                               user; optimistic mutations, per-account disk snapshot
-    PhotoLibraryScanner.swift photo-library → countries (on-device)
-    PhotoTripBuilder.swift    located photos → trips, stops and where home is
-    PlaceSearch.swift         Apple Maps place search (food-only for meals, restaurants by
-                              cuisine for the dice) + "On this day" reminders
+    PlaceSearch.swift         Apple Maps search (restaurants for a meal, by cuisine for a spin)
+    PhotoMetadata.swift       where and when a meal photo was taken
     NearMe.swift              one-shot location, only when a food feature needs it
   Globe/                      SceneKit globe: tessellated Natural Earth polygons,
-                              ribbon borders, small-country dots, themed, fit-to-view camera
-  Views/                      App · Auth · Onboarding · Globe · Meals · Memories · Trips · Social · Groups · Passport · Shared
+                              ribbon borders, small-country dots, spin + fly flights
+  Views/                      App · Auth · Onboarding · Globe · Spin · Tables · Meals · Me · Passport · Social · Shared
 ```
 
 Rules worth keeping:
 
+- **Circles before cards.** The world is on a plate, meals are plates, tables
+  are round with people seated at them, a pick is a ticket, a saved restaurant
+  is a tag, the editor is a receipt, the passport is a booklet. Reach for
+  `Tableware.swift` and `Ticket.swift` before adding another rounded rectangle.
 - **Every color is a token with a dark variant** (`Theme.swift`). Don't draw
   `.primary` text on a hard-coded paper color — that's what broke Dark Mode before.
 - **Screens read `AppModel`, not their own copies** of the user's data, so a
@@ -127,23 +123,21 @@ Rules worth keeping:
 - **Images go through `ImagePipeline`** (disk-cached by storage path,
   downsampled to display size). Don't use `AsyncImage` for storage photos.
 - **Privacy is the server's job** (RLS). Client queries filter for relevance only.
-- **Paper, not panels.** The Passport tab is a booklet — gold-blocked cover,
-  a data page with a machine-readable strip, stamp pages with a stitched
-  spine and page numbers (`PassportBook.swift`). A trip is a ticket
-  (`TicketShape`), a saved place is a luggage tag, a memory's words sit on a
-  postcard. Reach for those before adding another rounded rectangle.
+- A round map clips Apple Maps' logo and Legal link: pad the map's safe area
+  (`SpinResultSheet`) so they stay inside the circle.
 - Upload JPEGs via `ImageTools` — renderers use `.pixels` format (1pt = 1px)
   and re-encoding strips EXIF GPS from shared photos.
 
 ## Backend
 
-Travel model (migration `20260917120000_travel_passport.sql`): `entries` rows
-with `kind = 'memory'` are memories (pre-pivot meals are `kind = 'meal'` and
-never read), `stamps` are the countries you've been to, and *Friends*
-visibility (`visibility = 'groups'`) reaches mutual follows and group mates via
-`is_friend()`. RPCs: `friends_feed`, `my_activity`, `add_stamps`,
-`join_group_by_invite` (rate-limited). Edge function: `delete-account`.
+The app reads `entries` of kind `meal`, `tastes` (the stamps, refitted from
+meals by a trigger; `add_tastes` for the checklist), `saved_places` with a
+`cuisine_code` (restaurants to try), and the group tables. Dinner picks are
+`20260922090000_table_tickets.sql`. *Friends* visibility (`visibility =
+'groups'`) reaches mutual follows and table mates via `is_friend()`.
+
+The travel era's `stamps`, `trip_plans` and `kind = 'memory'` entries are
+still in the database, untouched; the app no longer reads or writes them.
 
 Push delivery still needs the paid Apple Developer account (entitlement +
-APNs key); device-token registration is in place and **local** "On this day"
-reminders work without it.
+APNs key); device-token registration is in place.

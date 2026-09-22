@@ -1,13 +1,14 @@
 import SwiftUI
 
-/// Four tabs, each with one job: explore your world, see your friends'
-/// travels, plan with your groups, and your passport.
+/// Three tabs, each with one job: your world and the spin, the tables you
+/// eat with, and your food passport.
 struct RootView: View {
     @Environment(AppModel.self) private var app
     @State private var tab: Tab = RootView.initialTab
+    @State private var openTable: UUID?
 
     enum Tab: String {
-        case globe, friends, groups, passport
+        case globe, tables, me
     }
 
     var body: some View {
@@ -16,26 +17,26 @@ struct RootView: View {
             GlobeScreen()
                 .tabItem { Label("Globe", image: "tab-globe") }
                 .tag(Tab.globe)
-            FriendsView()
-                .tabItem { Label("Friends", image: "tab-people") }
-                .tag(Tab.friends)
+            TablesView(open: $openTable)
+                .tabItem { Label("Tables", image: "tab-groups") }
+                .tag(Tab.tables)
                 .badge(app.unseenActivity > 0 ? Text("\(app.unseenActivity)") : nil)
-            GroupsView()
-                .tabItem { Label("Groups", image: "tab-groups") }
-                .tag(Tab.groups)
-            PassportView()
-                .tabItem { Label("Passport", image: "tab-profile") }
-                .tag(Tab.passport)
+            MeView()
+                .tabItem { Label("Me", image: "tab-profile") }
+                .tag(Tab.me)
         }
         .fullScreenCover(isPresented: $app.needsOnboarding) {
             OnboardingView()
         }
         .sheet(item: $app.route) { route in
             switch route {
-            case .memory(let id):
-                MemoryLoaderSheet(memoryId: id)
+            case .meal(let id):
+                MealLoaderSheet(mealId: id)
             case .joinGroup(let code):
-                JoinGroupSheet(code: code) { tab = .groups }
+                JoinTableSheet(code: code) { id in
+                    tab = .tables
+                    openTable = id
+                }
             case .profile(let id):
                 NavigationStack {
                     ProfileView(userId: id)
@@ -51,34 +52,23 @@ struct RootView: View {
         #if DEBUG
         .sheet(item: $debugScreen) { screen in
             switch screen {
-            case .editor: MemoryEditorView(mode: .new(countryCode: "PT", pickPhotosFirst: false))
-            case .importPhotos: NavigationStack { PhotoImportView(onDone: { debugScreen = nil }) }
-            case .checklist: NavigationStack { CountryChecklistView(onDone: { debugScreen = nil }) }
-            case .wrapped: NavigationStack { WrappedView() }
-            case .settings: SettingsView()
-            case .memory:
-                if let memory = app.memories.first(where: { !$0.photos.isEmpty && $0.notes != nil }) {
-                    MemoryDetailView(memory: memory)
-                }
-            case .country: CountryMemoriesSheet(code: Self.debugCountry)
-            case .planTrip: TripPlanEditorSheet(mode: .new(countryCode: Self.debugCountry))
-            case .dinner: DinnerDiceSheet()
-            case .cuisine: CuisineSheet(code: Self.debugCountry)
             case .meal: MealEditorView(mode: .new(cuisine: nil, place: nil))
+            case .detail:
+                if let meal = app.meals.first(where: { !$0.photos.isEmpty && $0.notes != nil }) {
+                    MealDetailView(meal: meal)
+                }
+            case .settings: SettingsView()
+            case .cuisine: CuisineSheet(code: Self.debugCode)
             case .cuisines: NavigationStack { CuisineChecklistView(onDone: { debugScreen = nil }) }
+            case .spin: SpinResultSheet(code: Self.debugCode, tableId: nil)
+            case .tableSpin: SpinResultSheet(code: Self.debugCode, tableId: DemoData.dinnerClub)
             case .share:
                 ShareCard {
                     PassportShareCard(profile: app.me, stats: app.stats,
-                                      stamps: app.stamps.sorted {
-                                          ($0.lastVisited ?? "") > ($1.lastVisited ?? "")
-                                      })
+                                      tastes: app.tastes.sorted { $0.createdAt > $1.createdAt })
                 }
-            case .trip:
-                if let plan = app.tripPlans.first(where: { !$0.isOver }) {
-                    TripPlanDetailSheet(plan: plan)
-                }
-            case .stamp: StampMomentView(codes: ["PT"], number: 21, date: "2026-09-10") { debugScreen = nil }
-            case .burst: StampMomentView(codes: ["DE", "NL", "CZ", "AT", "HU"]) { debugScreen = nil }
+            case .stamp: StampMomentView(codes: ["GE"], number: 21, date: "2026-09-10", tasted: true) { debugScreen = nil }
+            case .burst: StampMomentView(codes: ["TH", "VN", "KR", "ET", "PE"], tasted: true) { debugScreen = nil }
             }
         }
         .task {
@@ -88,27 +78,32 @@ struct RootView: View {
                 try? await Task.sleep(for: .seconds(1))
                 debugScreen = screen
             }
+            if let i = args.firstIndex(of: "-table"), i + 1 < args.count {
+                try? await Task.sleep(for: .seconds(0.8))
+                tab = .tables
+                openTable = args[i + 1] == "club" ? DemoData.dinnerClub : UUID(uuidString: args[i + 1])
+            }
         }
         #endif
     }
 
     #if DEBUG
-    /// Headless screenshot hook: `-open editor|import|checklist|wrapped|settings|memory|stamp|burst|trip|country|plan`.
+    /// Headless screenshot hook: `-open meal|detail|settings|cuisine|cuisines|spin|tablespin|share|stamp|burst`.
     enum DebugScreen: String, Identifiable {
-        case editor, importPhotos = "import", checklist, wrapped, settings, memory, stamp, burst, trip, country, planTrip = "plan", share, dinner, meal, cuisines, cuisine
+        case meal, detail, settings, cuisine, cuisines, spin, tableSpin = "tablespin", share, stamp, burst
         var id: String { rawValue }
     }
     @State private var debugScreen: DebugScreen?
 
-    /// `-open country -code ES`
-    private static var debugCountry: String {
+    /// `-open cuisine -code ET`
+    private static var debugCode: String {
         let args = ProcessInfo.processInfo.arguments
         if let i = args.firstIndex(of: "-code"), i + 1 < args.count { return args[i + 1].uppercased() }
-        return "JP"
+        return "ET"
     }
     #endif
 
-    /// Headless test hook: `-tab friends` opens on that tab.
+    /// Headless test hook: `-tab tables` opens on that tab.
     private static var initialTab: Tab {
         #if DEBUG
         let args = ProcessInfo.processInfo.arguments
@@ -120,22 +115,22 @@ struct RootView: View {
     }
 }
 
-/// Opens a memory by id (notification taps, links).
-struct MemoryLoaderSheet: View {
-    let memoryId: UUID
+/// Opens a meal by id (notification taps, links).
+struct MealLoaderSheet: View {
+    let mealId: UUID
 
     @Environment(AppModel.self) private var app
-    @State private var memory: Memory?
+    @State private var meal: Meal?
     @State private var missing = false
 
     var body: some View {
         SwiftUI.Group {
-            if let memory {
-                MemoryDetailView(memory: memory)
+            if let meal {
+                MealDetailView(meal: meal)
             } else if missing {
                 NavigationStack {
-                    EmptyStateView(systemImage: "photo.on.rectangle.angled",
-                                   title: "Memory unavailable",
+                    EmptyStateView(systemImage: "fork.knife",
+                                   title: "Meal unavailable",
                                    message: "It may have been deleted, or it isn't shared with you.")
                         .frame(maxHeight: .infinity)
                         .paperBackground()
@@ -145,10 +140,10 @@ struct MemoryLoaderSheet: View {
             }
         }
         .task {
-            if let local = app.memories.first(where: { $0.id == memoryId }) {
-                memory = local
-            } else if let fetched = try? await app.backend.memory(id: memoryId) {
-                memory = fetched
+            if let local = app.meals.first(where: { $0.id == mealId }) {
+                meal = local
+            } else if let fetched = try? await app.backend.meal(id: mealId) {
+                meal = fetched
             } else {
                 missing = true
             }
@@ -156,10 +151,10 @@ struct MemoryLoaderSheet: View {
     }
 }
 
-/// "Join Europe 2027?" from an invite link.
-struct JoinGroupSheet: View {
+/// "Pull up a chair?" from an invite link.
+struct JoinTableSheet: View {
     let code: String
-    var onJoined: () -> Void
+    var onJoined: (UUID) -> Void
 
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
@@ -167,20 +162,21 @@ struct JoinGroupSheet: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            Image(systemName: "person.3.fill")
-                .font(.system(size: 34))
-                .foregroundStyle(Color.brand)
-                .frame(width: 80, height: 80)
-                .background(Color.brandSoft, in: Circle())
+            RoundTable(seats: (0..<4).map { TableSeat.empty($0) }, cloth: .brand, seatSize: 26, showsPlates: true) {
+                Image(systemName: "fork.knife")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Color.brand)
+            }
+            .frame(width: 140, height: 140)
             VStack(spacing: 6) {
-                Text("Join a travel group?")
+                Text("Pull up a chair?")
                     .font(.displaySmall)
-                Text("You were invited with the code \(Text(code).font(.body.monospaced()).bold()). Members see each other's friends-only memories and share a globe.")
+                Text("You were invited to a table with the code \(Text(code).font(.body.monospaced()).bold()). Everyone at it shares a globe, spins for dinner together, and sees each other's friends-only meals.")
                     .font(.subheadline)
                     .foregroundStyle(Color.inkSecondary)
                     .multilineTextAlignment(.center)
             }
-            Button(busy ? "Joining…" : "Join group") {
+            Button(busy ? "Joining…" : "Take a seat") {
                 Task { await join() }
             }
             .buttonStyle(.primary)
@@ -191,17 +187,17 @@ struct JoinGroupSheet: View {
         .padding(28)
         .frame(maxHeight: .infinity)
         .paperBackground()
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
     private func join() async {
         busy = true
         defer { busy = false }
         do {
-            try await app.joinGroup(code: code)
-            app.celebrate("You're in! Say hi in the group chat.")
-            onJoined()
+            let id = try await app.joinGroup(code: code)
+            app.celebrate("You're in! Say hi at the table.")
             dismiss()
+            onJoined(id)
         } catch {
             app.show(error)
         }

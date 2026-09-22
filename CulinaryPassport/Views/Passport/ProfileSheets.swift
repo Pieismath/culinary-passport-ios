@@ -33,12 +33,12 @@ struct ProfileEditSheet: View {
                             .autocorrectionDisabled()
                             .textContentType(.username)
                     }
-                    TextField("A line about how you travel", text: $bio, axis: .vertical)
+                    TextField("A line about how you eat", text: $bio, axis: .vertical)
                         .lineLimit(1...4)
                 }
                 .listRowBackground(Color.card)
 
-                Section("Home") {
+                Section("Home kitchen") {
                     Button { pickingHome = true } label: {
                         HStack {
                             Text("Country").foregroundStyle(Color.ink)
@@ -74,7 +74,7 @@ struct ProfileEditSheet: View {
                 } header: {
                     Text("Your color")
                 } footer: {
-                    Text("Your countries wear this on every globe. In a group, if someone already has it, yours shifts to the next free color there.")
+                    Text("Your cuisines wear this on every globe. At a table, if someone already has it, yours shifts to the next free colour there.")
                 }
                 .listRowBackground(Color.card)
 
@@ -82,8 +82,8 @@ struct ProfileEditSheet: View {
                     Toggle("Public profile", isOn: $isPublic).tint(Color.brand)
                 } footer: {
                     Text(isPublic
-                         ? "Anyone can find you, follow you and see your stamps. Memories still follow their own visibility."
-                         : "Only friends (people you follow each other with) and your groups can see your stamps. You won't appear in search.")
+                         ? "Anyone can find you, follow you and see your cuisines. Meals still follow their own visibility."
+                         : "Only friends (people you follow each other with) and your tables can see your cuisines. You won't appear in search.")
                 }
                 .listRowBackground(Color.card)
 
@@ -142,21 +142,21 @@ struct ProfileEditSheet: View {
     }
 }
 
-/// "How many new countries this year?"
+/// "How many new cuisines this year?"
 struct GoalEditorSheet: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
     @State private var custom = ""
 
-    private let presets = [1, 3, 5, 10]
+    private let presets = [4, 12, 26, 52]
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 22) {
                 VStack(spacing: 6) {
-                    Text("New countries in \(String(Calendar.current.component(.year, from: Date())))")
+                    Text("New cuisines in \(String(Calendar.current.component(.year, from: Date())))")
                         .font(.displaySmall)
-                    Text("Counts countries you visit for the first time this year.")
+                    Text("Counts cuisines whose first meal you log this year. Twelve is one a month; fifty-two is one a week.")
                         .font(.subheadline)
                         .foregroundStyle(Color.inkSecondary)
                 }
@@ -213,11 +213,10 @@ struct GoalEditorSheet: View {
     }
 }
 
-/// Account, privacy, reminders, legal — and the irreversible stuff, last.
+/// Account, privacy, legal — and the irreversible stuff, last.
 struct SettingsView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
-    @State private var remindersOn = MemoryReminders.isEnabled
     @State private var defaultVisibility = SettingsStore.defaultVisibility
     @State private var confirmSignOut = false
     @State private var confirmDelete = false
@@ -243,28 +242,14 @@ struct SettingsView: View {
                 .listRowBackground(Color.card)
 
                 Section {
-                    Picker("New memories are", selection: $defaultVisibility) {
+                    Picker("New meals are", selection: $defaultVisibility) {
                         ForEach(Visibility.allCases) { Label($0.label, systemImage: $0.systemImage).tag($0) }
                     }
                     .onChange(of: defaultVisibility) { _, value in SettingsStore.defaultVisibility = value }
-                    Toggle(isOn: Binding(get: { remindersOn }, set: { on in
-                        remindersOn = on
-                        Task {
-                            let granted = await MemoryReminders.setEnabled(on, memories: app.memories)
-                            remindersOn = granted
-                            if on && !granted {
-                                app.show(AppError("Notifications are off for Stampd — turn them on in Settings."))
-                            }
-                        }
-                    })) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("“On this day” reminders")
-                            Text("A nudge on the anniversary of a trip.").font(.caption).foregroundStyle(Color.inkSecondary)
-                        }
-                    }
-                    .tint(Color.brand)
                 } header: {
-                    Text("Memories")
+                    Text("Meals")
+                } footer: {
+                    Text(defaultVisibility.explanation)
                 }
                 .listRowBackground(Color.card)
 
@@ -280,7 +265,7 @@ struct SettingsView: View {
                     Button(deleting ? "Deleting…" : "Delete account", role: .destructive) { confirmDelete = true }
                         .disabled(deleting)
                 } footer: {
-                    Text("Deleting your account permanently removes your passport, memories, photos, and any groups you own.")
+                    Text("Deleting your account permanently removes your passport, meals, photos, and any tables you own.")
                 }
                 .listRowBackground(Color.card)
             }
@@ -300,7 +285,7 @@ struct SettingsView: View {
             .confirmationDialog("Delete your account?", isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("Delete everything", role: .destructive) { Task { await deleteAccount() } }
             } message: {
-                Text("This is permanent. Your stamps, memories, photos and owned groups are deleted, and it can't be undone.")
+                Text("This is permanent. Your stamps, meals, photos and the tables you own are deleted, and it can't be undone.")
             }
             .overlay { if deleting { SavingOverlay(text: "Deleting your account…") } }
         }

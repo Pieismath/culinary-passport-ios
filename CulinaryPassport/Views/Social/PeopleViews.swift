@@ -133,48 +133,53 @@ struct FollowButton: View {
 enum AppLinks {
     static func inviteText(from me: Profile?) -> String {
         let who = me?.handle.map { " — I'm \($0)" } ?? ""
-        return "I'm mapping everywhere I've been on Stampd, the travel passport app\(who). Come compare passports!"
+        return "I'm eating my way around the world on Stampd\(who). Come see how much of the world you've eaten — and spin for dinner with me."
     }
 
     static func groupInvite(_ group: Group) -> String {
-        "Join “\(group.name)” on Stampd — we're sharing one globe. Tap culinarypassport://join/\(group.inviteCode) or enter the code \(group.inviteCode)."
+        "Pull up a chair at “\(group.name)” on Stampd — we spin the globe for dinner and eat our way round it together. Tap culinarypassport://join/\(group.inviteCode) or enter the code \(group.inviteCode)."
     }
 }
 
-/// Someone else's passport: who they are, where they've been, what they saw.
+/// Someone else's food passport: who they are, how much of the world they've
+/// eaten, and the plates they've shared with you.
 struct ProfileView: View {
     let userId: UUID
 
     @Environment(AppModel.self) private var app
     @Environment(\.colorScheme) private var scheme
     @State private var profile: Profile?
-    @State private var stamps: [Stamp] = []
-    @State private var memories: [Memory] = []
+    @State private var tastes: [Taste] = []
+    @State private var meals: [Meal] = []
     @State private var counts: (followers: Int, following: Int) = (0, 0)
     @State private var loaded = false
-    @State private var viewing: Memory?
+    @State private var viewing: Meal?
     @State private var reporting = false
     @State private var confirmBlock = false
-    @State private var selectedCountry: String?
+    @State private var selectedCuisine: String?
 
-    private var visited: Set<String> { Set(stamps.map(\.countryCode)) }
-    private var stats: TravelStats { TravelStats(stamps: stamps, memories: memories) }
-    private var shared: Int { visited.intersection(app.visitedCodes).count }
+    private var tasted: Set<String> { Set(tastes.map(\.countryCode)) }
+    private var stats: FoodStats { FoodStats(tastes: tastes, meals: meals) }
+    private var shared: Int { tasted.intersection(app.tastedCodes).count }
+    /// What they've had that you haven't — ideas for dinner.
+    private var theyHaveYouHavent: [String] {
+        tasted.subtracting(app.tastedCodes).filter(Cuisine.isCuisine).sorted { Cuisine.name(for: $0) < Cuisine.name(for: $1) }
+    }
 
     var body: some View {
         ScrollView {
             if let profile {
-                VStack(spacing: 18) {
+                VStack(spacing: 20) {
                     header(profile)
-                    globeCard(profile)
-                    if !stamps.isEmpty { stampsCard }
-                    memoriesSection
+                    globe(profile)
+                    if userId != app.myId, !theyHaveYouHavent.isEmpty { ideas(profile) }
+                    platesSection
                 }
                 .padding(Metrics.gutter)
                 .padding(.bottom, 24)
             } else if loaded {
                 EmptyStateView(systemImage: "lock", title: "Profile unavailable",
-                               message: "This traveller's profile is private, or they've left Stampd.")
+                               message: "This profile is private, or they've left Stampd.")
                     .padding(.top, 80)
             } else {
                 ProgressView().padding(.top, 120)
@@ -187,7 +192,7 @@ struct ProfileView: View {
             if userId != app.myId, profile != nil {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
-                        ShareLink(item: "\(profile?.name ?? "") on Stampd: \(stats.countries) countries so far.") {
+                        ShareLink(item: "\(profile?.name ?? "") on Stampd: \(stats.cuisines) cuisines, \(stats.worldPercentText) of the world eaten.") {
                             Label("Share profile", systemImage: "square.and.arrow.up")
                         }
                         Button(role: .destructive) { reporting = true } label: {
@@ -208,7 +213,7 @@ struct ProfileView: View {
                 }
             }
         }
-        .sheet(item: $viewing) { MemoryDetailView(memory: $0) }
+        .sheet(item: $viewing) { MealDetailView(meal: $0) }
         .sheet(isPresented: $reporting) {
             ReportSheet(title: "Report profile") { reason in
                 Task { await app.report("profile", id: userId, reason: reason) }
@@ -226,6 +231,8 @@ struct ProfileView: View {
     private func header(_ profile: Profile) -> some View {
         VStack(spacing: 12) {
             AvatarView(profile: profile, size: 96)
+                .overlay(Circle().strokeBorder(Color.card, lineWidth: 4))
+                .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
             VStack(spacing: 4) {
                 Text(profile.name).font(.displaySmall).foregroundStyle(Color.ink)
                 HStack(spacing: 6) {
@@ -238,15 +245,15 @@ struct ProfileView: View {
                 .foregroundStyle(Color.inkSecondary)
                 if let bio = profile.bio, !bio.isEmpty {
                     Text(bio)
-                        .font(.subheadline)
+                        .font(.system(.subheadline, design: .serif))
                         .foregroundStyle(Color.ink)
                         .multilineTextAlignment(.center)
                         .padding(.top, 4)
                 }
             }
             HStack(spacing: 0) {
-                StatTile(value: "\(stats.countries)", label: "Countries")
-                StatTile(value: "\(stats.continents)", label: "Continents")
+                StatTile(value: "\(stats.cuisines)", label: "Cuisines")
+                StatTile(value: stats.worldPercentText, label: "Of the world")
                 StatTile(value: "\(counts.followers)", label: "Followers")
                 StatTile(value: "\(counts.following)", label: "Following")
             }
@@ -255,73 +262,76 @@ struct ProfileView: View {
                 FollowButton(userId: userId)
             }
             if userId != app.myId, shared > 0 {
-                Pill(systemImage: "sparkles", text: "You've both been to \(shared) countr\(shared == 1 ? "y" : "ies")",
+                Pill(systemImage: "fork.knife", text: "You've both had \(shared.counted("cuisine"))",
                      tint: .brand, background: .brandSoft)
             }
         }
         .frame(maxWidth: .infinity)
-        .card()
     }
 
-    private func globeCard(_ profile: Profile) -> some View {
+    private func globe(_ profile: Profile) -> some View {
         let tint = UIColor(hex: profile.color) ?? Palette.brand
         let style = GlobeStyle(scheme)
-        let visited = self.visited
-        return VStack(alignment: .leading, spacing: 10) {
-            SectionHeader("\(profile.firstName)'s globe", subtitle: "\(stats.worldPercentText) of the world")
-            GlobeCanvas(
-                style: style,
-                color: { code, isSelected in
-                    visited.contains(code)
-                        ? style.visited(tint, memories: 1, selected: isSelected)
-                        : style.untouched(selected: isSelected)
-                },
-                selected: $selectedCountry,
-                isEmphasized: { visited.contains($0) }
-            )
-            .frame(height: 300)
-            if let code = selectedCountry, let country = CountryStore.byCode[code] {
-                HStack {
-                    Text("\(country.flag) \(country.name)").font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Text(visited.contains(code) ? "Visited" : "Not yet")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(visited.contains(code) ? Color.brand : Color.inkSecondary)
+        let tasted = self.tasted
+        return VStack(spacing: 10) {
+            ZStack {
+                Plate(rim: 0.15, band: .clear) {
+                    GlobeCanvas(
+                        style: style,
+                        color: { code, isSelected in
+                            tasted.contains(code)
+                                ? style.tasted(tint, meals: 1, selected: isSelected)
+                                : style.untouched(selected: isSelected)
+                        },
+                        selected: $selectedCuisine,
+                        isEmphasized: { tasted.contains($0) },
+                        fitMargin: 1.05
+                    )
                 }
+                ContinentRim(progress: FoodStats.continentProgress(tasted), tint: Color(uiColor: tint))
+            }
+            .frame(maxWidth: 340)
+            if let code = selectedCuisine {
+                HStack {
+                    Text("\(Country.flag(for: code)) \(Cuisine.name(for: code))").font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text(tasted.contains(code) ? "\(profile.firstName)'s had it" : "Not yet")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(tasted.contains(code) ? Color.brand : Color.inkSecondary)
+                }
+                .padding(.horizontal, 8)
                 .transition(.opacity)
             }
         }
-        .card()
     }
 
-    private var stampsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionHeader("Stamps", subtitle: stamps.count.counted("place"))
+    private func ideas(_ profile: Profile) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionHeader("\(profile.firstName)'s had, you haven't", subtitle: theyHaveYouHavent.count.counted("cuisine"))
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    ForEach(stamps.sorted { ($0.firstVisited ?? "") > ($1.firstVisited ?? "") }) { stamp in
-                        StampBadge(code: stamp.countryCode, subtitle: stamp.yearsText, size: 86)
+                HStack(spacing: 2) {
+                    ForEach(theyHaveYouHavent.prefix(20), id: \.self) { code in
+                        StampBadge(code: code, size: 84, inked: false, tasted: true)
                     }
                 }
                 .padding(.vertical, 4)
             }
         }
-        .card()
     }
 
-    @ViewBuilder private var memoriesSection: some View {
-        if !memories.isEmpty {
+    @ViewBuilder private var platesSection: some View {
+        if !meals.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                SectionHeader("Memories", subtitle: "\(memories.count) shared with you")
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
-                    ForEach(memories) { memory in
-                        Button { viewing = memory } label: { MemoryTile(memory: memory) }
-                            .buttonStyle(.plain)
+                SectionHeader("Plates", subtitle: "\(meals.count) shared with you")
+                PlateStack(columns: 3, spacing: 10) {
+                    ForEach(meals.prefix(30)) { meal in
+                        Button { viewing = meal } label: { MealPlate(meal: meal) }
+                            .buttonStyle(PressScale())
                     }
                 }
             }
         } else if loaded, profile != nil {
-            Text("No memories shared with you yet.")
+            Text("No meals shared with you yet.")
                 .font(.subheadline)
                 .foregroundStyle(Color.inkTertiary)
                 .padding(.top, 8)
@@ -333,13 +343,13 @@ struct ProfileView: View {
         let backend = app.backend
         let id = userId
         async let fetchedProfile = try? backend.profile(id: id)
-        async let fetchedStamps = try? backend.stamps(userIds: [id])
-        async let fetchedMemories = try? backend.memories(userId: id)
+        async let fetchedTastes = try? backend.tastes(userIds: [id])
+        async let fetchedMeals = try? backend.meals(userId: id)
         async let fetchedCounts = try? backend.followCounts(userId: id)
-        let (p, s, m, c) = await (fetchedProfile, fetchedStamps, fetchedMemories, fetchedCounts)
+        let (p, t, m, c) = await (fetchedProfile, fetchedTastes, fetchedMeals, fetchedCounts)
         if let p { profile = p; app.people[p.id] = p }
-        stamps = s ?? []
-        memories = m ?? []
+        tastes = t ?? []
+        meals = m ?? []
         counts = c ?? (0, 0)
         loaded = true
     }

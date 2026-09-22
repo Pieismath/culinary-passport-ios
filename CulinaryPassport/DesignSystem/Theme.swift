@@ -1,11 +1,11 @@
 import SwiftUI
 import UIKit
 
-// Stampd's visual language: a travel journal. Warm paper, sepia ink, the
-// brand's passport green, and stamp-pad inks for accents. Every color is a
-// light/dark pair — screens never hard-code a paper tone and then draw
-// `.primary` text on it (that combination is what went white-on-cream in
-// Dark Mode before).
+// Stampd's visual language: a food passport on a set table. Warm paper and
+// porcelain, sepia ink, the brand's green, saffron, and stamp-pad inks for
+// accents. Every color is a light/dark pair — screens never hard-code a paper
+// tone and then draw `.primary` text on it (that combination is what went
+// white-on-cream in Dark Mode before).
 
 extension UIColor {
     convenience init(rgb: UInt32, alpha: CGFloat = 1) {
@@ -60,8 +60,8 @@ enum Palette {
     static let brandSoft = UIColor.dynamic(light: 0xDCE8DF, dark: 0x1E3328)
     static let onBrand = UIColor.dynamic(light: 0xFFFCF6, dark: 0x0F1A14)
     static let stampRed = UIColor.dynamic(light: 0xB4452D, dark: 0xE88468)
-    static let bucket = UIColor.dynamic(light: 0xC0832A, dark: 0xE4AE55)
-    static let bucketSoft = UIColor.dynamic(light: 0xF4E4C6, dark: 0x3A2E19)
+    static let saffron = UIColor.dynamic(light: 0xC0832A, dark: 0xE4AE55)
+    static let saffronSoft = UIColor.dynamic(light: 0xF4E4C6, dark: 0x3A2E19)
     static let danger = UIColor.dynamic(light: 0xB3261E, dark: 0xF2877E)
     /// Gold leaf on the passport cover. The cover is dark in both modes, so
     /// this one colour is right in both.
@@ -81,8 +81,8 @@ extension Color {
     static let brandSoft = Color(uiColor: Palette.brandSoft)
     static let onBrand = Color(uiColor: Palette.onBrand)
     static let stampRed = Color(uiColor: Palette.stampRed)
-    static let bucket = Color(uiColor: Palette.bucket)
-    static let bucketSoft = Color(uiColor: Palette.bucketSoft)
+    static let saffron = Color(uiColor: Palette.saffron)
+    static let saffronSoft = Color(uiColor: Palette.saffronSoft)
     static let danger = Color(uiColor: Palette.danger)
     static let foil = Color(uiColor: Palette.foil)
 

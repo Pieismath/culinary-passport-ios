@@ -1,6 +1,7 @@
 import Foundation
 
-/// Point → stampable place, tuned for photo locations rather than globe taps.
+/// Point → place on the globe, tuned for real locations (where a restaurant
+/// is) rather than globe taps.
 ///
 /// The bundled Natural Earth 110m polygons don't include the small places
 /// people stamp (Singapore, Hong Kong, Vatican City…), and several of them sit
@@ -258,4 +259,16 @@ enum PlaceLocator {
         Island(code: "WF", lat: -14.30, lng: -178.10, km: 30),  // Futuna
         Island(code: "WS", lat: -13.76, lng: -172.10, km: 90),
     ]
+}
+
+enum Geo {
+    /// Great-circle distance in kilometres (haversine).
+    static func distanceKm(_ lat1: Double, _ lng1: Double, _ lat2: Double, _ lng2: Double) -> Double {
+        let r = 6371.0
+        let dLat = (lat2 - lat1) * .pi / 180
+        let dLng = (lng2 - lng1) * .pi / 180
+        let a = sin(dLat / 2) * sin(dLat / 2)
+            + cos(lat1 * .pi / 180) * cos(lat2 * .pi / 180) * sin(dLng / 2) * sin(dLng / 2)
+        return 2 * r * atan2(sqrt(a), sqrt(1 - a))
+    }
 }

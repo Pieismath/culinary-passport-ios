@@ -1,30 +1,31 @@
 import SwiftUI
+import MapKit
 
-/// The group chat: messages, shared memories, reactions and inline replies,
-/// live over realtime. Every message can be reacted to, replied to, deleted
-/// by its author, or reported (App Store 1.2 — this used to be missing).
-struct GroupChatView: View {
+/// The talk at a table: messages, shared meals and dinner picks, with
+/// reactions and inline replies, live over realtime. A pick is a ticket
+/// everyone can answer with "I'm in". Every message can be reacted to,
+/// replied to, deleted by its author, or reported.
+struct TableConversation: View {
     let group: Group
+    @Bindable var chat: ChatModel
+    var composing: FocusState<Bool>.Binding
+    /// Spin the table's globe (from the composer's menu).
+    var onSpin: () -> Void
+    /// Find a picked cuisine near you.
+    var onFind: (String) -> Void
 
     @Environment(AppModel.self) private var app
-    @State private var chat: ChatModel
     @State private var composer = ""
     @State private var replyTo: GroupPost?
     @State private var reactingTo: GroupPost?
     @State private var reporting: ReportTarget?
-    @State private var viewing: Memory?
-    @State private var sharingMemory = false
+    @State private var viewing: Meal?
+    @State private var sharingMeal = false
     @State private var sending = false
-    @FocusState private var composerFocused: Bool
 
     struct ReportTarget: Identifiable {
         let type: String
         let id: UUID
-    }
-
-    init(group: Group) {
-        self.group = group
-        _chat = State(initialValue: ChatModel(groupId: group.id))
     }
 
     private var palette: [UUID: String] {
@@ -49,33 +50,42 @@ struct GroupChatView: View {
                         .padding(.top, 8)
                     }
                     if chat.loaded && chat.posts.isEmpty {
-                        EmptyStateView(systemImage: "bubble.left.and.bubble.right",
-                                       title: "Start planning",
-                                       message: "Share a memory, float a destination, or tap 🎲 and let the globe decide.")
-                            .padding(.top, 60)
+                        VStack(spacing: 6) {
+                            Text("Nothing said yet")
+                                .font(.displayXSmall)
+                                .foregroundStyle(Color.ink)
+                            Text("Spin the globe for tonight's cuisine, share a meal, or just say hi.")
+                                .font(.subheadline)
+                                .foregroundStyle(Color.inkSecondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(.top, 30)
+                        .padding(.horizontal, 30)
                     }
+                    let palette = self.palette
                     ForEach(chat.posts.reversed().filter { !app.blocked.contains($0.authorId) }) { post in
                         MessageView(
                             post: post,
                             isMine: post.authorId == app.myId,
                             author: app.profile(post.authorId),
                             color: Color(hex: palette[post.authorId] ?? "#8b8b8b"),
-                            memory: post.entryId.flatMap { chat.memories[$0] },
-                            memoryMissing: post.entryId != nil && chat.memoriesLoaded && post.entryId.flatMap { chat.memories[$0] } == nil,
+                            meal: post.entryId.flatMap { chat.meals[$0] },
+                            mealMissing: post.entryId != nil && chat.mealsLoaded && post.entryId.flatMap { chat.meals[$0] } == nil,
                             replies: (chat.comments[post.id] ?? []).filter { !app.blocked.contains($0.authorId) },
-                            tallies: ReactionTally.tally((chat.reactions[post.id] ?? []).map { ($0.emoji, $0.userId) }, me: app.myId),
+                            reactions: chat.reactions[post.id] ?? [],
                             palette: palette,
                             onReact: { emoji, on in Task { await chat.react(post.id, emoji: emoji, on: on, app: app) } },
                             onPickReaction: { reactingTo = post },
                             onReply: {
                                 replyTo = post
-                                composerFocused = true
+                                composing.wrappedValue = true
                             },
                             onDelete: { Task { await chat.delete(post, app: app) } },
                             onReport: { reporting = ReportTarget(type: "post", id: post.id) },
                             onDeleteReply: { reply in Task { await chat.deleteReply(reply, app: app) } },
                             onReportReply: { reply in reporting = ReportTarget(type: "comment", id: reply.id) },
-                            onOpenMemory: { viewing = $0 }
+                            onOpenMeal: { viewing = $0 },
+                            onFind: onFind
                         )
                         .id(post.id)
                     }
@@ -86,15 +96,15 @@ struct GroupChatView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
-            .paperBackground()
             .safeAreaInset(edge: .bottom) { composerBar }
             .onChange(of: chat.posts.first?.id) {
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
+            .onChange(of: chat.mealsLoaded) {
+                // Shared meals arrive after the words and make the page taller.
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
         }
-        .navigationTitle(group.name)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .tabBar)
         .sheet(item: $reactingTo) { post in
             EmojiPickerSheet { emoji in Task { await chat.react(post.id, emoji: emoji, on: true, app: app) } }
         }
@@ -103,10 +113,10 @@ struct GroupChatView: View {
                 Task { await app.report(target.type, id: target.id, reason: reason) }
             }
         }
-        .sheet(item: $viewing) { MemoryDetailView(memory: $0) }
-        .sheet(isPresented: $sharingMemory) {
-            MemoryPickerSheet { memory in
-                Task { await chat.send(text: "", memoryId: memory.id, app: app) }
+        .sheet(item: $viewing) { MealDetailView(meal: $0) }
+        .sheet(isPresented: $sharingMeal) {
+            MealPickerSheet { meal in
+                Task { await chat.send(text: "", mealId: meal.id, app: app) }
             }
         }
         .task { await chat.reload(app: app) }
@@ -122,7 +132,6 @@ struct GroupChatView: View {
                 }
             }
         }
-        .refreshable { await chat.reload(app: app) }
     }
 
     private var composerBar: some View {
@@ -132,7 +141,8 @@ struct GroupChatView: View {
                     Image(systemName: "arrowshape.turn.up.left.fill").font(.caption)
                     Text("Replying to \(app.profile(replyTo.authorId)?.firstName ?? "message")")
                         .font(.caption.weight(.semibold))
-                    Text(replyTo.text.isEmpty ? "shared memory" : replyTo.text)
+                    Text(replyTo.pick.map { $0.placeName ?? Cuisine.name(for: $0.cuisineCode) }
+                         ?? (replyTo.text.isEmpty ? "shared meal" : replyTo.text))
                         .font(.caption)
                         .lineLimit(1)
                         .foregroundStyle(Color.inkSecondary)
@@ -147,14 +157,11 @@ struct GroupChatView: View {
             }
             HStack(alignment: .bottom, spacing: 8) {
                 Menu {
-                    Button { sharingMemory = true } label: {
-                        Label("Share a memory", systemImage: "photo.on.rectangle")
+                    Button(action: onSpin) {
+                        Label("Spin for the table", systemImage: "globe.europe.africa.fill")
                     }
-                    Button { Task { await suggestDinner() } } label: {
-                        Label("What should we eat?", systemImage: "fork.knife")
-                    }
-                    Button { Task { await suggestDestination() } } label: {
-                        Label("Where should we go?", systemImage: "airplane")
+                    Button { sharingMeal = true } label: {
+                        Label("Share a meal", systemImage: "fork.knife")
                     }
                 } label: {
                     Image(systemName: "plus")
@@ -163,11 +170,11 @@ struct GroupChatView: View {
                         .frame(width: 38, height: 38)
                         .background(Color.sunken, in: Circle())
                 }
-                .accessibilityLabel("Share")
+                .accessibilityLabel("Spin or share")
 
-                TextField(replyTo == nil ? "Message" : "Reply", text: $composer, axis: .vertical)
+                TextField(replyTo == nil ? "Say something to the table" : "Reply", text: $composer, axis: .vertical)
                     .lineLimit(1...5)
-                    .focused($composerFocused)
+                    .focused(composing)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
                     .background(Color.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -201,37 +208,13 @@ struct GroupChatView: View {
         composer = ""
         replyTo = nil
         let sent = target == nil
-            ? await chat.send(text: text, memoryId: nil, app: app)
+            ? await chat.send(text: text, mealId: nil, app: app)
             : await chat.reply(to: target!.id, text: text, app: app)
         if !sent {
             // Offline or rejected: give the words back instead of losing them.
             composer = text
             replyTo = target
         }
-    }
-
-    /// A cuisine none of you has tasted — the weekly version of the trip dice.
-    private func suggestDinner() async {
-        let members = app.members(of: group.id)
-        let tasted = Set(((try? await app.backend.tastes(userIds: members)) ?? []).map(\.countryCode))
-        let pool = Cuisine.dicePool.filter { !tasted.contains($0) }
-        guard let pick = (pool.isEmpty ? Cuisine.dicePool : pool).randomElement() else { return }
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        let line = pool.isEmpty ? "we've all had it, but it's been a while"
-                                : "none of us has tried it yet"
-        await chat.send(text: "🎲 Dinner roll: \(Country.flag(for: pick)) \(Cuisine.name(for: pick)) — \(line)!",
-                        memoryId: nil, app: app)
-        app.backend.logEvent("dinner_rolled", props: ["cuisine": pick, "group": "true"])
-    }
-
-    /// A country none of you has stamped — let the globe pick the next trip.
-    private func suggestDestination() async {
-        let members = app.members(of: group.id)
-        let stamps = (try? await app.backend.stamps(userIds: members)) ?? []
-        let visited = Set(stamps.map(\.countryCode))
-        let pool = CountryStore.all.filter { $0.isSovereign && !visited.contains($0.code) }
-        guard let pick = pool.randomElement() else { return }
-        await chat.send(text: "🎲 Where next? \(pick.flag) \(pick.name) — none of us has been yet!", memoryId: nil, app: app)
     }
 }
 
@@ -242,15 +225,18 @@ final class ChatModel {
     var posts: [GroupPost] = []          // newest first
     var comments: [UUID: [PostComment]] = [:]
     var reactions: [UUID: [PostReaction]] = [:]
-    var memories: [UUID: Memory] = [:]
+    var meals: [UUID: Meal] = [:]
     var loaded = false
-    var memoriesLoaded = false
+    var mealsLoaded = false
     var canLoadEarlier = false
     var loadingEarlier = false
 
     private let pageSize = 40
 
     init(groupId: UUID) { self.groupId = groupId }
+
+    /// The latest word at the table, for the header.
+    var latest: GroupPost? { posts.first }
 
     func reload(app: AppModel) async {
         guard let page = try? await app.backend.posts(groupId: groupId, before: nil, limit: pageSize) else {
@@ -285,22 +271,23 @@ final class ChatModel {
             comments[id] = fetchedComments.filter { $0.postId == id }
             reactions[id] = fetchedReactions.filter { $0.postId == id }
         }
-        let memoryIds = Array(Set(page.compactMap(\.entryId)).subtracting(memories.keys))
-        if !memoryIds.isEmpty, let fetched = try? await app.backend.memories(ids: memoryIds) {
-            for memory in fetched { memories[memory.id] = memory }
+        let mealIds = Array(Set(page.compactMap(\.entryId)).subtracting(meals.keys))
+        if !mealIds.isEmpty, let fetched = try? await app.backend.meals(ids: mealIds) {
+            for meal in fetched { meals[meal.id] = meal }
         }
-        memoriesLoaded = true
+        mealsLoaded = true
         var people = Set(page.map(\.authorId))
         people.formUnion(fetchedComments.map(\.authorId))
-        people.formUnion(memories.values.map(\.userId))
+        people.formUnion(fetchedReactions.map(\.userId))
+        people.formUnion(meals.values.map(\.userId))
         _ = await app.profiles(for: Array(people))
     }
 
     @discardableResult
-    func send(text: String, memoryId: UUID?, app: AppModel) async -> Bool {
+    func send(text: String, mealId: UUID?, app: AppModel) async -> Bool {
         do {
-            try await app.backend.createPost(groupId: groupId, text: text, memoryId: memoryId)
-            app.backend.logEvent("chat_sent", props: memoryId == nil ? nil : ["memory": "true"])
+            try await app.backend.createPost(groupId: groupId, text: text, mealId: mealId, pick: nil)
+            app.backend.logEvent("chat_sent", props: mealId == nil ? nil : ["meal": "true"])
             await reload(app: app)
             return true
         } catch {
@@ -363,10 +350,10 @@ private struct MessageView: View {
     let isMine: Bool
     let author: Profile?
     let color: Color
-    let memory: Memory?
-    let memoryMissing: Bool
+    let meal: Meal?
+    let mealMissing: Bool
     let replies: [PostComment]
-    let tallies: [ReactionTally]
+    let reactions: [PostReaction]
     let palette: [UUID: String]
     let onReact: (String, Bool) -> Void
     let onPickReaction: () -> Void
@@ -375,24 +362,33 @@ private struct MessageView: View {
     let onReport: () -> Void
     let onDeleteReply: (PostComment) -> Void
     let onReportReply: (PostComment) -> Void
-    let onOpenMemory: (Memory) -> Void
+    let onOpenMeal: (Meal) -> Void
+    let onFind: (String) -> Void
 
     @Environment(AppModel.self) private var app
+
+    /// "I'm in" answers a pick; it isn't shown with the other reactions.
+    private var tallies: [ReactionTally] {
+        let others = post.pick == nil ? reactions : reactions.filter { $0.emoji != GroupPost.imIn }
+        return ReactionTally.tally(others.map { ($0.emoji, $0.userId) }, me: app.myId)
+    }
 
     var body: some View {
         VStack(alignment: isMine ? .trailing : .leading, spacing: 5) {
             HStack(alignment: .bottom, spacing: 8) {
-                if isMine { Spacer(minLength: 50) }
+                if isMine { Spacer(minLength: 40) }
                 if !isMine {
                     AvatarView(profile: author, size: 30, ring: color)
                 }
                 VStack(alignment: isMine ? .trailing : .leading, spacing: 4) {
                     if !isMine {
-                        Text(author?.firstName ?? "Traveller")
+                        Text(author?.firstName ?? "Someone")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(color)
                     }
-                    if !post.text.isEmpty {
+                    if let pick = post.pick {
+                        PickTicket(post: post, pick: pick, reactions: reactions, onToggleIn: onReact, onFind: onFind)
+                    } else if !post.text.isEmpty {
                         Text(post.text)
                             .font(.body)
                             .foregroundStyle(isMine ? Color.onBrand : Color.ink)
@@ -407,11 +403,11 @@ private struct MessageView: View {
                                 }
                             }
                     }
-                    if let memory {
-                        Button { onOpenMemory(memory) } label: { SharedMemoryCard(memory: memory) }
+                    if let meal {
+                        Button { onOpenMeal(meal) } label: { SharedMealPlate(meal: meal) }
                             .buttonStyle(.plain)
-                    } else if memoryMissing {
-                        Label("This memory isn't available", systemImage: "eye.slash")
+                    } else if mealMissing {
+                        Label("This meal isn't available", systemImage: "eye.slash")
                             .font(.caption)
                             .foregroundStyle(Color.inkTertiary)
                             .padding(10)
@@ -433,7 +429,7 @@ private struct MessageView: View {
                         Button(role: .destructive, action: onReport) { Label("Report", systemImage: "flag") }
                     }
                 }
-                if !isMine { Spacer(minLength: 50) }
+                if !isMine { Spacer(minLength: 40) }
             }
 
             if !tallies.isEmpty {
@@ -457,7 +453,7 @@ private struct MessageView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(replies) { reply in
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(reply.authorId == app.myId ? "You" : (app.profile(reply.authorId)?.firstName ?? "Traveller"))
+                            Text(reply.authorId == app.myId ? "You" : (app.profile(reply.authorId)?.firstName ?? "Someone"))
                                 .font(.caption.weight(.bold))
                                 .foregroundStyle(Color(hex: palette[reply.authorId] ?? "#8b8b8b"))
                             Text(reply.text)
@@ -485,38 +481,138 @@ private struct MessageView: View {
     }
 }
 
-private struct SharedMemoryCard: View {
-    let memory: Memory
+/// A dinner pick in the chat: a ticket for the restaurant (or the cuisine
+/// the globe landed on), with who's in.
+struct PickTicket: View {
+    let post: GroupPost
+    let pick: DinnerPick
+    let reactions: [PostReaction]
+    let onToggleIn: (String, Bool) -> Void
+    let onFind: (String) -> Void
+
+    @Environment(AppModel.self) private var app
+
+    private var ink: Color { StampInk.color(for: pick.cuisineCode) }
+    private var inIds: [UUID] { reactions.filter { $0.emoji == GroupPost.imIn }.map(\.userId) }
+    private var iAmIn: Bool { app.myId.map(inIds.contains) ?? false }
+    /// What the author wrote beyond the generated line.
+    private var note: String? {
+        let text = post.text.trimmed
+        return text.isEmpty || text == pick.fallbackText ? nil : text
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Color.clear
-                .frame(width: 230, height: 170)
-                .overlay {
-                    if let first = memory.photos.first {
-                        StoragePhoto(path: first, maxPixel: 700)
-                    } else {
-                        PostcardPlaceholder(code: memory.countryCode, title: nil)
+        TicketCard(stubWidth: 66, stubTint: ink.opacity(0.12)) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(pick.hasPlace ? "\(Country.flag(for: pick.cuisineCode)) \(Cuisine.name(for: pick.cuisineCode).uppercased()) · SUGGESTED"
+                                   : "🎲 THE GLOBE SAYS")
+                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                    .tracking(0.6)
+                    .foregroundStyle(ink)
+                    .lineLimit(1)
+                Text(pick.hasPlace ? (pick.placeName ?? "") : "\(Country.flag(for: pick.cuisineCode)) \(Cuisine.name(for: pick.cuisineCode))")
+                    .font(.displayXSmall)
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(2)
+                if let address = pick.placeAddress, pick.hasPlace {
+                    Text(address)
+                        .font(.caption)
+                        .foregroundStyle(Color.inkSecondary)
+                        .lineLimit(1)
+                }
+                if let note {
+                    Text(note)
+                        .font(.subheadline)
+                        .foregroundStyle(Color.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 8) {
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        onToggleIn(GroupPost.imIn, !iAmIn)
+                    } label: {
+                        Label(iAmIn ? "You're in" : "I'm in", systemImage: iAmIn ? "checkmark.circle.fill" : "hand.raised")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(iAmIn ? Color.onBrand : Color.brand)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(iAmIn ? Color.brand : Color.brandSoft, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(iAmIn ? "You're in. Tap to drop out." : "I'm in")
+                    if !inIds.isEmpty {
+                        AvatarStack(profiles: inIds.compactMap { app.profile($0) }, size: 20, max: 4)
+                        Text("\(inIds.count) in")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.inkSecondary)
                     }
                 }
-                .clipped()
-            VStack(alignment: .leading, spacing: 2) {
-                Text(memory.displayTitle).font(.subheadline.weight(.semibold)).foregroundStyle(Color.ink).lineLimit(1)
-                Text("\(memory.country?.flag ?? "") \(memory.placeLine)")
-                    .font(.caption).foregroundStyle(Color.inkSecondary).lineLimit(1)
+                .padding(.top, 3)
             }
-            .padding(10)
+        } stub: {
+            Button {
+                if pick.hasPlace, pick.hasCoordinate { directions() } else { onFind(pick.cuisineCode) }
+            } label: {
+                VStack(spacing: 4) {
+                    if pick.hasPlace {
+                        Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(ink)
+                        Text("GO")
+                    } else {
+                        StampBadge(code: pick.cuisineCode, size: 46, inked: false, tasted: true)
+                        Text("FIND")
+                    }
+                }
+                .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                .tracking(1.4)
+                .foregroundStyle(ink)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(pick.hasPlace ? "Directions" : "Find \(Cuisine.name(for: pick.cuisineCode)) near you")
         }
-        .frame(width: 230)
-        .background(Color.card)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.hairline.opacity(0.7), lineWidth: 0.5))
+        .frame(maxWidth: 300)
+    }
+
+    private func directions() {
+        guard let lat = pick.placeLat, let lng = pick.placeLng else { return }
+        let item = MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lng)))
+        item.name = pick.placeName
+        item.openInMaps(launchOptions: [MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeDefault])
     }
 }
 
-/// Pick one of your memories to share.
-struct MemoryPickerSheet: View {
-    let onPick: (Memory) -> Void
+/// A shared meal in the chat: its plate, what it was, where.
+private struct SharedMealPlate: View {
+    let meal: Meal
+
+    var body: some View {
+        HStack(spacing: 12) {
+            MealPlate(meal: meal, size: 86)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(meal.displayTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(2)
+                Text(meal.feedLine)
+                    .font(.caption)
+                    .foregroundStyle(Color.inkSecondary)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: 150, alignment: .leading)
+        }
+        .padding(10)
+        .padding(.trailing, 4)
+        .background(Color.card, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.hairline.opacity(0.7), lineWidth: 0.5))
+    }
+}
+
+/// Pick one of your meals to share.
+struct MealPickerSheet: View {
+    let onPick: (Meal) -> Void
 
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
@@ -524,28 +620,28 @@ struct MemoryPickerSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                let shareable = app.memories.filter { $0.visibility != .private }
+                let shareable = app.meals.filter { $0.visibility != .private }
                 if shareable.isEmpty {
-                    EmptyStateView(systemImage: "photo.on.rectangle", title: "Nothing to share yet",
-                                   message: "Memories set to Only me can't be shared to groups.")
+                    EmptyStateView(systemImage: "fork.knife", title: "Nothing to share yet",
+                                   message: "Meals set to Only me can't be shared to a table.")
                         .padding(.top, 60)
                 } else {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
-                        ForEach(shareable) { memory in
+                    PlateStack(columns: 3, spacing: 10) {
+                        ForEach(shareable) { meal in
                             Button {
-                                onPick(memory)
+                                onPick(meal)
                                 dismiss()
                             } label: {
-                                MemoryTile(memory: memory)
+                                MealPlate(meal: meal)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressScale())
                         }
                     }
                     .padding(Metrics.gutter)
                 }
             }
             .paperBackground()
-            .navigationTitle("Share a memory")
+            .navigationTitle("Share a meal")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }

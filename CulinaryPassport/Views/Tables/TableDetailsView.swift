@@ -1,10 +1,10 @@
 import SwiftUI
 import PhotosUI
 
-/// Group photo, name, members, invite, leave/delete. Owners edit.
-struct GroupDetailsView: View {
+/// A table's photo, name, who's at it, invite, leave/delete. Owners edit.
+struct TableDetailsView: View {
     let group: Group
-    /// The group is gone for this user (left or deleted) — pop its screens.
+    /// The table is gone for this user (left or deleted) — pop its screens.
     var onGone: () -> Void
 
     @Environment(AppModel.self) private var app
@@ -45,7 +45,7 @@ struct GroupDetailsView: View {
                 if isOwner {
                     Section("Name") {
                         HStack {
-                            TextField("Group name", text: $name)
+                            TextField("Table name", text: $name)
                             if name.trimmed != current.name && !name.trimmed.isEmpty {
                                 Button("Save") { Task { await saveName() } }
                                     .fontWeight(.semibold)
@@ -72,7 +72,7 @@ struct GroupDetailsView: View {
                     }
                     .listRowBackground(Color.card)
                     ShareLink(item: AppLinks.groupInvite(current)) {
-                        Label("Invite people", systemImage: "paperplane.fill")
+                        Label("Invite someone to the table", systemImage: "paperplane.fill")
                     }
                     .listRowBackground(Color.card)
                     if isOwner {
@@ -98,7 +98,7 @@ struct GroupDetailsView: View {
                         } label: {
                             HStack(spacing: 12) {
                                 AvatarView(profile: app.profile(id), size: 36)
-                                Text(id == app.myId ? "You" : (app.profile(id)?.name ?? "Traveller"))
+                                Text(id == app.myId ? "You" : (app.profile(id)?.name ?? "Someone"))
                                 Spacer()
                                 if id == current.createdBy {
                                     Pill(text: "Owner")
@@ -112,20 +112,20 @@ struct GroupDetailsView: View {
 
                 Section {
                     if isOwner {
-                        Button("Delete group", role: .destructive) { confirmDelete = true }
+                        Button("Delete table", role: .destructive) { confirmDelete = true }
                             .listRowBackground(Color.card)
                     } else {
-                        Button("Leave group", role: .destructive) { confirmLeave = true }
+                        Button("Leave table", role: .destructive) { confirmLeave = true }
                             .listRowBackground(Color.card)
                     }
                 } footer: {
                     Text(isOwner
-                         ? "Deleting removes the group and its chat for everyone. Everyone's memories stay in their passports."
+                         ? "Deleting removes the table and its chat for everyone. Everyone's meals stay in their own passports."
                          : "You'll need the invite code to rejoin.")
                 }
             }
             .paperListStyle()
-            .navigationTitle("Group details")
+            .navigationTitle("Table details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .onAppear {
@@ -140,7 +140,7 @@ struct GroupDetailsView: View {
                 Button("Leave", role: .destructive) { Task { await leave() } }
             }
             .confirmationDialog("Delete \(current.name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
-                Button("Delete group", role: .destructive) { Task { await deleteGroup() } }
+                Button("Delete table", role: .destructive) { Task { await deleteGroup() } }
             } message: {
                 Text("This can't be undone.")
             }

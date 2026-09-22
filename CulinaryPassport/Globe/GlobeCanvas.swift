@@ -16,20 +16,20 @@ struct GlobeStyle: Equatable {
         isDark ? UIColor(rgb: 0x9A907E, alpha: 0.9) : UIColor(red: 0.34, green: 0.29, blue: 0.21, alpha: 0.92)
     }
     var selected: UIColor { isDark ? UIColor(rgb: 0xF6F1E7) : UIColor(red: 0.24, green: 0.19, blue: 0.13, alpha: 0.95) }
-    var bucket: UIColor { isDark ? UIColor(rgb: 0xE4AE55) : UIColor(rgb: 0xD9A04A) }
+    var saffron: UIColor { isDark ? UIColor(rgb: 0xE4AE55) : UIColor(rgb: 0xD9A04A) }
     var shared: UIColor { isDark ? UIColor(rgb: 0xA58BEA) : UIColor(rgb: 0x8B6FD8) }
 
-    /// Visited tint that deepens with every memory, saturating around five.
-    func visited(_ tint: UIColor, memories: Int, selected: Bool) -> UIColor {
-        let depth = min(0.24, CGFloat(max(0, memories - 1)) * 0.06)
-        let base = tint.composited(alpha: min(0.95, (isDark ? 0.78 : 0.68) + depth), over: ocean)
+    /// A cuisine you've eaten: your colour, deepening with every meal and
+    /// saturating around five.
+    func tasted(_ tint: UIColor, meals: Int, selected: Bool) -> UIColor {
+        let depth = min(0.24, CGFloat(max(0, meals - 1)) * 0.06)
+        let base = tint.composited(alpha: min(0.95, (isDark ? 0.74 : 0.64) + depth), over: land)
         return selected ? highlight(base) : base
     }
 
-    /// Tasted but not visited: the same colour, a lighter wash — you know
-    /// the food, not the place (yet).
-    func tasted(_ tint: UIColor, selected: Bool) -> UIColor {
-        let base = tint.composited(alpha: isDark ? 0.36 : 0.3, over: land)
+    /// Someone else at the table has had it: a lighter wash of their ink.
+    func tastedByOthers(_ tint: UIColor, selected: Bool) -> UIColor {
+        let base = tint.composited(alpha: isDark ? 0.4 : 0.34, over: land)
         return selected ? highlight(base) : base
     }
 
@@ -37,8 +37,9 @@ struct GlobeStyle: Equatable {
         selected ? highlight(land) : land
     }
 
-    func bucketListed(selected: Bool) -> UIColor {
-        let base = bucket.composited(alpha: isDark ? 0.55 : 0.5, over: land)
+    /// The cuisine a spin just landed on, waiting for its first taste.
+    func landed(selected: Bool) -> UIColor {
+        let base = saffron.composited(alpha: isDark ? 0.7 : 0.62, over: land)
         return selected ? highlight(base) : base
     }
 
@@ -58,7 +59,7 @@ struct GlobeStyle: Equatable {
 struct GlobeCanvas: UIViewRepresentable {
     struct FocusRequest: Equatable {
         enum Style {
-            case spin   // a couple of full revolutions on the way (the dice)
+            case spin   // a roulette spin: flicked hard, clicking as it slows
             case fly    // direct eased rotation (search / deep links)
         }
 
@@ -74,10 +75,15 @@ struct GlobeCanvas: UIViewRepresentable {
     /// The country code on landing, or nil if the user grabbed the globe mid-flight.
     var onFocusLanded: ((String?) -> Void)? = nil
     var onLongPress: ((String) -> Void)? = nil
-    /// Small-place dots for places that matter here (visited, bucket list)
+    /// Small-place dots for places that matter here (tasted, landed on)
     /// draw full size; the rest recede so Europe isn't a field of rings.
     var isEmphasized: (String) -> Bool = { _ in true }
     var interactive = true
+    /// How far above centre a flight lands (radians of pitch); nil lets the
+    /// globe decide (a little high, clear of a panel over the bottom).
+    var landingBias: Float? = nil
+    /// Paper margin around the globe when it's framed (1 = edge to edge).
+    var fitMargin: Float = 1.12
 
     func makeCoordinator() -> Coordinator { Coordinator(selected: $selected) }
 
@@ -115,6 +121,8 @@ struct GlobeCanvas: UIViewRepresentable {
 
         coordinator.scnView = view
         coordinator.onLongPress = onLongPress
+        coordinator.landingBias = landingBias
+        coordinator.fitMargin = fitMargin
         coordinator.apply(style: style)
         recolor(coordinator)
         return view
@@ -229,6 +237,8 @@ struct GlobeCanvas: UIViewRepresentable {
         var globeNode: SCNNode?
         weak var scnView: SCNView?
         var onLongPress: ((String) -> Void)?
+        var landingBias: Float?
+        var fitMargin: Float = 1.12
         var lastFocusId: UUID?
 
         private var selected: Binding<String?>
@@ -241,15 +251,39 @@ struct GlobeCanvas: UIViewRepresentable {
         private let pitchLimit: Float = 1.45
         private var cameraZ: Float = Coordinator.defaultCameraZ
 
+        /// One animated turn of the globe.
+        private struct Flight {
+            enum Easing { case inOut, spin }
+
+            var fromYaw: Float, fromPitch: Float, toYaw: Float, toPitch: Float
+            var fromZ: Float, toZ: Float
+            var start: CFTimeInterval, duration: CFTimeInterval
+            var code: String?
+            var haptic: UIImpactFeedbackGenerator.FeedbackStyle?
+            var easing: Easing = .inOut
+            var onLanded: ((String?) -> Void)?
+
+            func eased(_ t: Float) -> Float {
+                switch easing {
+                case .inOut:
+                    return t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
+                case .spin:
+                    // Flicked: full speed at once, then a long slow-down.
+                    return 1 - pow(1 - t, 4)
+                }
+            }
+        }
+
         private enum Drive {
             case idle
             case inertia(vYaw: Float, vPitch: Float)
-            case animate(fromYaw: Float, fromPitch: Float, toYaw: Float, toPitch: Float,
-                         fromZ: Float, toZ: Float,
-                         start: CFTimeInterval, duration: CFTimeInterval,
-                         code: String?, haptic: UIImpactFeedbackGenerator.FeedbackStyle?,
-                         onLanded: ((String?) -> Void)?)
+            case animate(Flight)
         }
+
+        /// Roulette clicks: one each time the spin turns another notch.
+        private let clicker = UISelectionFeedbackGenerator()
+        private var lastClickYaw: Float = 0
+        private static let notch = Float.pi / 10
 
         private var drive: Drive = .idle
         private var displayLink: CADisplayLink?
@@ -268,8 +302,7 @@ struct GlobeCanvas: UIViewRepresentable {
             let aspect = Float(size.width / size.height)
             let horizontal = 2 * atan(tan(vertical / 2) * aspect)
             let limiting = min(vertical, horizontal)
-            let margin: Float = 1.12
-            let fitted = margin / sin(limiting / 2)
+            let fitted = fitMargin / sin(limiting / 2)
             let wasHome = abs(cameraZ - homeZ) < 0.01
             homeZ = fitted
             // Keep a user's zoom; re-frame only if they were at home.
@@ -329,12 +362,11 @@ struct GlobeCanvas: UIViewRepresentable {
             let toPitch = max(-pitchLimit, min(pitchLimit, Float(spot.lat * .pi / 180)))
             toYaw = yaw + shortestDelta(from: yaw, to: toYaw)
 
-            drive = .animate(fromYaw: yaw, fromPitch: pitch,
-                             toYaw: zoomingOut ? yaw : toYaw,
-                             toPitch: zoomingOut ? pitch : toPitch,
-                             fromZ: cameraZ, toZ: toZ,
-                             start: CACurrentMediaTime(), duration: 0.45,
-                             code: nil, haptic: nil, onLanded: nil)
+            drive = .animate(Flight(fromYaw: yaw, fromPitch: pitch,
+                                    toYaw: zoomingOut ? yaw : toYaw,
+                                    toPitch: zoomingOut ? pitch : toPitch,
+                                    fromZ: cameraZ, toZ: toZ,
+                                    start: CACurrentMediaTime(), duration: 0.45))
             startTicking()
         }
 
@@ -479,12 +511,17 @@ struct GlobeCanvas: UIViewRepresentable {
             let duration: CFTimeInterval
             let haptic: UIImpactFeedbackGenerator.FeedbackStyle
             let toZ: Float
+            var easing = Flight.Easing.inOut
             switch style {
             case .spin:
+                // Two and a bit turns, whichever way it was already going.
                 toYaw -= Float.pi * 4
-                duration = 1.9
-                haptic = .medium
+                duration = 2.8
+                haptic = .heavy
+                easing = .spin
                 toZ = country.hasShape ? homeZ : min(homeZ, 3.2)
+                clicker.prepare()
+                lastClickYaw = yaw
             case .fly:
                 duration = 0.75
                 haptic = .light
@@ -493,12 +530,12 @@ struct GlobeCanvas: UIViewRepresentable {
 
             // Land a little above center so the panel over the bottom half
             // doesn't cover it.
-            let panelBias = min(0.22, 0.06 * (toZ - 1))
-            drive = .animate(fromYaw: yaw, fromPitch: pitch, toYaw: toYaw,
-                             toPitch: min(pitchLimit, max(-pitchLimit, toPitch - panelBias)),
-                             fromZ: cameraZ, toZ: toZ,
-                             start: CACurrentMediaTime(), duration: duration,
-                             code: code, haptic: haptic, onLanded: onLanded)
+            let panelBias = landingBias ?? min(0.22, 0.06 * (toZ - 1))
+            drive = .animate(Flight(fromYaw: yaw, fromPitch: pitch, toYaw: toYaw,
+                                    toPitch: min(pitchLimit, max(-pitchLimit, toPitch - panelBias)),
+                                    fromZ: cameraZ, toZ: toZ,
+                                    start: CACurrentMediaTime(), duration: duration,
+                                    code: code, haptic: haptic, easing: easing, onLanded: onLanded))
             startTicking()
         }
 
@@ -523,8 +560,8 @@ struct GlobeCanvas: UIViewRepresentable {
         /// Stop any flight. `announcing` tells the caller it never landed —
         /// unless another flight is taking over.
         private func cancelDrive(announcing: Bool = true) {
-            if case let .animate(_, _, _, _, _, _, _, _, _, _, onLanded) = drive, announcing {
-                announce { onLanded?(nil) }
+            if case let .animate(flight) = drive, announcing, let onLanded = flight.onLanded {
+                announce { onLanded(nil) }
             }
             drive = .idle
             displayLink?.isPaused = true
@@ -586,20 +623,24 @@ struct GlobeCanvas: UIViewRepresentable {
                 }
                 applyOrientation()
 
-            case let .animate(fromYaw, fromPitch, toYaw, toPitch, fromZ, toZ, start, duration, code, haptic, onLanded):
-                let t = min(1, max(0, Float((now - start) / duration)))
-                let eased = t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
-                yaw = fromYaw + (toYaw - fromYaw) * eased
-                pitch = fromPitch + (toPitch - fromPitch) * eased
-                cameraZ = fromZ + (toZ - fromZ) * eased
+            case let .animate(flight):
+                let t = min(1, max(0, Float((now - flight.start) / flight.duration)))
+                let eased = flight.eased(t)
+                yaw = flight.fromYaw + (flight.toYaw - flight.fromYaw) * eased
+                pitch = flight.fromPitch + (flight.toPitch - flight.fromPitch) * eased
+                cameraZ = flight.fromZ + (flight.toZ - flight.fromZ) * eased
                 cameraNode.position.z = cameraZ
                 updateMarkerScale()
                 applyOrientation()
+                if flight.easing == .spin, abs(yaw - lastClickYaw) >= Self.notch {
+                    lastClickYaw = yaw
+                    clicker.selectionChanged()
+                }
                 if t >= 1 {
                     drive = .idle
                     displayLink?.isPaused = true
-                    if let haptic { UIImpactFeedbackGenerator(style: haptic).impactOccurred() }
-                    onLanded?(code)
+                    if let haptic = flight.haptic { UIImpactFeedbackGenerator(style: haptic).impactOccurred() }
+                    flight.onLanded?(flight.code)
                 }
             }
         }

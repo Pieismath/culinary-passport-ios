@@ -7,9 +7,9 @@ import MapKit
 /// the cuisine, and a first taste plays the stamp moment.
 struct MealEditorView: View {
     enum Mode {
-        /// Optionally pre-filled: from the dinner dice or a country's page.
+        /// Optionally pre-filled: from a spin's restaurants or a cuisine's page.
         case new(cuisine: String?, place: PlaceResult?)
-        case edit(Memory)
+        case edit(Meal)
     }
 
     let mode: Mode
@@ -19,9 +19,9 @@ struct MealEditorView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
 
-    @State private var draft = MemoryDraft()
+    @State private var draft = MealDraft()
     /// Stable across retries: a save whose response was lost can't land twice.
-    @State private var newMemoryId = UUID()
+    @State private var newMealId = UUID()
     @State private var photos: [MealPhoto] = []
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var showPicker = false
@@ -47,7 +47,7 @@ struct MealEditorView: View {
 
     private static let maxPhotos = 6
 
-    private var original: Memory? {
+    private var original: Meal? {
         if case .edit(let meal) = mode { return meal }
         return nil
     }
@@ -55,7 +55,7 @@ struct MealEditorView: View {
     private var canSave: Bool { !draft.countryCode.isEmpty && !saving && !loadingPhotos }
 
     private var isDirty: Bool {
-        if let original { return draft != MemoryDraft(memory: original) || !photos.isEmpty }
+        if let original { return draft != MealDraft(meal: original) || !photos.isEmpty }
         return !photos.isEmpty || !draft.restaurantName.isEmpty || !draft.dish.isEmpty
     }
 
@@ -71,18 +71,15 @@ struct MealEditorView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    photoStrip
-                    restaurantButton
-                    cuisineCard
-                    dishField
-                    details
+                VStack(spacing: 22) {
+                    plated
+                    receipt
                 }
                 .padding(Metrics.gutter)
                 .padding(.bottom, 30)
             }
             .scrollDismissesKeyboard(.interactively)
-            .paperBackground()
+            .background(TableclothBackdrop())
             .navigationTitle(original == nil ? "Log a meal" : "Edit meal")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -120,176 +117,246 @@ struct MealEditorView: View {
                 }
             }
             .fullScreenCover(item: $stampResult) { result in
-                StampMomentView(codes: [result.memory.countryCode], number: result.countryNumber,
-                                date: result.memory.date, tasted: true) { dismiss() }
+                StampMomentView(codes: [result.meal.countryCode], number: result.cuisineNumber,
+                                date: result.meal.date, tasted: true) { dismiss() }
             }
             .overlay { if saving { SavingOverlay(text: "Saving…") } }
             .task { await prepare() }
         }
     }
 
-    // ── Sections ─────────────────────────────────────────────────────────────
+    // ── The plate: your photo on it, the cuisine's stamp beside it ────────────
 
-    private var photoStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
+    private var photoCount: Int { draft.keptPhotos.count + photos.count }
+    private var ink: Color { draft.countryCode.isEmpty ? .brand : StampInk.color(for: draft.countryCode) }
+
+    private var plated: some View {
+        VStack(spacing: 14) {
+            ZStack(alignment: .bottomTrailing) {
                 Button { showPicker = true } label: {
-                    VStack(spacing: 6) {
-                        if loadingPhotos {
-                            ProgressView()
+                    Plate(rim: 0.13, band: ink.opacity(0.45)) {
+                        if let path = draft.keptPhotos.first {
+                            StoragePhoto(path: path, maxPixel: 900)
+                        } else if let photo = photos.first {
+                            Image(uiImage: photo.preview).resizable().scaledToFill()
                         } else {
-                            Image(systemName: "camera.fill").font(.title2)
+                            VStack(spacing: 8) {
+                                if loadingPhotos {
+                                    ProgressView()
+                                } else {
+                                    Image(systemName: "camera.fill")
+                                        .font(.system(size: 30))
+                                        .foregroundStyle(Color.brand)
+                                }
+                                Text("Add a photo")
+                                    .font(.headline)
+                                    .foregroundStyle(Color.ink)
+                                Text("Its location finds the restaurant")
+                                    .font(.caption)
+                                    .foregroundStyle(Color.inkSecondary)
+                            }
                         }
-                        Text(photos.isEmpty && draft.keptPhotos.isEmpty ? "Add photo" : "More")
-                            .font(.caption.weight(.semibold))
                     }
-                    .foregroundStyle(Color.brand)
-                    .frame(width: 104, height: 104)
-                    .background(Color.brandSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .frame(width: 250, height: 250)
+                }
+                .buttonStyle(PressScale())
+                .disabled(loadingPhotos || photoCount >= Self.maxPhotos)
+                .accessibilityLabel(photoCount == 0 ? "Add a photo" : "Add more photos")
+
+                Button { pickingCuisine = true } label: {
+                    if draft.countryCode.isEmpty {
+                        VStack(spacing: 2) {
+                            Image(systemName: "globe.europe.africa")
+                                .font(.system(size: 22, weight: .light))
+                            Text("CUISINE?")
+                                .font(.system(size: 9, weight: .heavy, design: .rounded))
+                                .tracking(0.8)
+                        }
+                        .foregroundStyle(Color.inkSecondary)
+                        .frame(width: 92, height: 92)
+                        .background(Color.paper, in: Circle())
+                        .overlay(Circle().strokeBorder(Color.inkTertiary, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])))
+                    } else {
+                        StampBadge(code: draft.countryCode, size: 104, tasted: true)
+                            .background(Circle().fill(Color.card.opacity(0.9)).padding(6))
+                    }
+                }
+                .buttonStyle(PressScale())
+                .offset(x: 34, y: 14)
+                .accessibilityLabel(draft.countryCode.isEmpty ? "Choose a cuisine"
+                                                              : "Cuisine, \(Cuisine.name(for: draft.countryCode)). Change")
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.trailing, 30)
+
+            if photoCount > 0 {
+                HStack(spacing: 10) {
+                    ForEach(draft.keptPhotos, id: \.self) { path in
+                        smallPlate { StoragePhoto(path: path, maxPixel: 200) } remove: {
+                            draft.keptPhotos.removeAll { $0 == path }
+                        }
+                    }
+                    ForEach(photos) { photo in
+                        smallPlate { Image(uiImage: photo.preview).resizable().scaledToFill() } remove: {
+                            photos.removeAll { $0.id == photo.id }
+                        }
+                    }
+                    if photoCount < Self.maxPhotos {
+                        Button { showPicker = true } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(Color.brand)
+                                .frame(width: 50, height: 50)
+                                .background(Color.paper, in: Circle())
+                                .overlay(Circle().strokeBorder(Color.brand.opacity(0.4),
+                                                               style: StrokeStyle(lineWidth: 1.2, dash: [3, 3])))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Add more photos")
+                    }
+                }
+            }
+        }
+    }
+
+    private func smallPlate<Photo: View>(@ViewBuilder _ photo: () -> Photo,
+                                         remove: @escaping () -> Void) -> some View {
+        let image = photo()
+        return Plate(rim: 0.16, band: .clear) { image }
+            .frame(width: 54, height: 54)
+            .overlay(alignment: .topTrailing) {
+                Button(action: remove) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .black.opacity(0.55))
+                }
+                .offset(x: 4, y: -4)
+                .accessibilityLabel("Remove photo")
+            }
+    }
+
+    // ── The receipt: where, what, when ───────────────────────────────────────
+
+    private var receipt: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("STAMPD")
+                Spacer()
+                Text(original == nil ? "MEAL RECEIPT" : "AMENDED RECEIPT")
+            }
+            .font(.system(size: 10, weight: .bold, design: .monospaced))
+            .tracking(1.4)
+            .foregroundStyle(Color.inkTertiary)
+            .padding(.bottom, 10)
+
+            DashedRule()
+
+            receiptRow("AT") {
+                Button { findingPlace = true } label: {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(draft.restaurantName.isEmpty ? "Where did you eat?" : draft.restaurantName)
+                            .font(.system(.headline, design: .serif))
+                            .foregroundStyle(draft.restaurantName.isEmpty ? Color.brand : Color.ink)
+                            .multilineTextAlignment(.trailing)
+                        if let guessedFromPhoto, !placeTouched {
+                            Text("from your photo · \(guessedFromPhoto)")
+                                .font(.caption2)
+                                .foregroundStyle(Color.inkSecondary)
+                        } else if !draft.city.isEmpty {
+                            Text(draft.city).font(.caption2).foregroundStyle(Color.inkSecondary)
+                        }
+                    }
                 }
                 .buttonStyle(.plain)
-                .disabled(loadingPhotos || photos.count + draft.keptPhotos.count >= Self.maxPhotos)
-
-                ForEach(draft.keptPhotos, id: \.self) { path in
-                    StoragePhoto(path: path, maxPixel: 320)
-                        .frame(width: 104, height: 104)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .overlay(alignment: .topTrailing) {
-                            removeButton { draft.keptPhotos.removeAll { $0 == path } }
-                        }
-                }
-                ForEach(photos) { photo in
-                    Image(uiImage: photo.preview)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 104, height: 104)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .overlay(alignment: .topTrailing) {
-                            removeButton { photos.removeAll { $0.id == photo.id } }
-                        }
-                }
             }
-        }
-    }
 
-    private func removeButton(_ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: "xmark.circle.fill")
-                .font(.title3)
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, .black.opacity(0.5))
-                .padding(4)
-        }
-        .accessibilityLabel("Remove photo")
-    }
-
-    private var restaurantButton: some View {
-        Button { findingPlace = true } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "fork.knife")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.brand)
-                    .frame(width: 40, height: 40)
-                    .background(Color.brandSoft, in: Circle())
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(draft.restaurantName.isEmpty ? "Where did you eat?" : draft.restaurantName)
-                        .font(.headline)
-                        .foregroundStyle(draft.restaurantName.isEmpty ? Color.inkSecondary : Color.ink)
-                    if let guessedFromPhoto, !placeTouched {
-                        Text("From your photo's location · \(guessedFromPhoto)")
-                            .font(.caption)
-                            .foregroundStyle(Color.inkSecondary)
-                    } else if !draft.city.isEmpty {
-                        Text(draft.city).font(.caption).foregroundStyle(Color.inkSecondary)
-                    } else {
-                        Text("Search restaurants nearby")
-                            .font(.caption)
-                            .foregroundStyle(Color.inkTertiary)
+            receiptRow("CUISINE") {
+                Button { pickingCuisine = true } label: {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(draft.countryCode.isEmpty ? "Choose"
+                             : "\(Country.flag(for: draft.countryCode)) \(Cuisine.name(for: draft.countryCode))")
+                            .font(.system(.headline, design: .serif))
+                            .foregroundStyle(draft.countryCode.isEmpty ? Color.brand : Color.ink)
+                        if let tasteNote {
+                            Text(tasteNote)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(tasteNote.hasPrefix("First") ? Color.brand : Color.inkSecondary)
+                        }
                     }
                 }
-                Spacer(minLength: 4)
-                Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(Color.inkTertiary)
+                .buttonStyle(.plain)
             }
-            .card(padding: 12)
-        }
-        .buttonStyle(.plain)
-    }
 
-    private var cuisineCard: some View {
-        Button { pickingCuisine = true } label: {
-            HStack(spacing: 14) {
-                if draft.countryCode.isEmpty {
-                    Image(systemName: "globe.europe.africa")
-                        .font(.system(size: 30, weight: .light))
-                        .foregroundStyle(Color.inkTertiary)
-                        .frame(width: 76, height: 76)
-                        .background(Color.sunken, in: Circle())
-                } else {
-                    StampBadge(code: draft.countryCode, size: 76, tasted: true)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Eyebrow(text: "Cuisine")
-                    Text(draft.countryCode.isEmpty ? "Which cuisine?" : Cuisine.name(for: draft.countryCode))
-                        .font(.displayXSmall)
-                        .foregroundStyle(draft.countryCode.isEmpty ? Color.inkSecondary : Color.ink)
-                    if let tasteNote {
-                        Text(tasteNote)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(tasteNote.hasPrefix("First") ? Color.brand : Color.inkSecondary)
-                    }
-                }
-                Spacer(minLength: 4)
-                Text(draft.countryCode.isEmpty ? "Choose" : "Change")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.brand)
+            receiptRow("DISH") {
+                TextField("Khachapuri, pad see ew…", text: $draft.dish)
+                    .font(.system(.headline, design: .serif))
+                    .multilineTextAlignment(.trailing)
+                    .autocorrectionDisabled()
             }
-            .card(padding: 12)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(draft.countryCode.isEmpty ? "Choose a cuisine"
-                                                      : "Cuisine, \(Cuisine.name(for: draft.countryCode)). Change")
-    }
 
-    private var dishField: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Eyebrow(text: "What did you have?")
-            TextField("Khachapuri, pad see ew, the tasting menu…", text: $draft.dish)
-                .font(.headline)
-                .autocorrectionDisabled()
-                .padding(12)
-                .background(Color.card, in: RoundedRectangle(cornerRadius: Metrics.corner, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: Metrics.corner, style: .continuous)
-                    .strokeBorder(Color.hairline.opacity(0.7), lineWidth: 0.5))
-        }
-    }
+            receiptRow("DATE", control: true) {
+                DatePicker("When", selection: Binding(get: { draft.date }, set: { draft.date = $0; dateTouched = true }),
+                           in: ...Date(), displayedComponents: .date)
+                    .labelsHidden()
+            }
 
-    private var details: some View {
-        VStack(spacing: 0) {
-            DatePicker("When", selection: Binding(get: { draft.date }, set: { draft.date = $0; dateTouched = true }),
-                       in: ...Date(), displayedComponents: .date)
-                .padding(12)
-            Divider().padding(.leading, 12)
-            TextField("A note, if it deserves one", text: $draft.notes, axis: .vertical)
-                .lineLimit(2...6)
-                .padding(12)
-            Divider().padding(.leading, 12)
-            HStack {
-                Text("Who can see it")
-                Spacer()
+            receiptRow("SEEN BY", control: true) {
                 Picker("Who can see it", selection: $draft.visibility) {
                     ForEach(Visibility.allCases) { option in
                         Label(option.label, systemImage: option.systemImage).tag(option)
                     }
                 }
                 .labelsHidden()
+                .tint(Color.ink)
             }
-            .padding(.leading, 12)
-            .padding(.trailing, 4)
-            .padding(.vertical, 6)
+
+            DashedRule().padding(.top, 4)
+
+            Text("NOTE")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .tracking(1.4)
+                .foregroundStyle(Color.inkTertiary)
+                .padding(.top, 12)
+            TextField("A note, if it deserves one", text: $draft.notes, axis: .vertical)
+                .font(.system(.body, design: .serif))
+                .lineLimit(2...6)
+                .padding(.vertical, 8)
+
+            DashedRule()
+            Text("THANK YOU · COME AGAIN")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .tracking(1.6)
+                .foregroundStyle(Color.inkTertiary)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 10)
         }
-        .background(Color.card, in: RoundedRectangle(cornerRadius: Metrics.cornerLarge, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Metrics.cornerLarge, style: .continuous)
-            .strokeBorder(Color.hairline.opacity(0.7), lineWidth: 0.5))
+        .padding(.horizontal, 18)
+        .padding(.vertical, 22)
+        .background {
+            ReceiptShape()
+                .fill(Color.card)
+                .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+        }
+    }
+
+    /// Controls (a date, a menu) centre on their row; text sits on its baseline.
+    private func receiptRow<Value: View>(_ label: String, control: Bool = false,
+                                         @ViewBuilder value: () -> Value) -> some View {
+        HStack(alignment: control ? .center : .firstTextBaseline, spacing: 10) {
+            Text(label)
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .tracking(1.2)
+                .foregroundStyle(Color.inkSecondary)
+                .fixedSize()
+            // Dotted leader, the way a menu joins a dish to its price.
+            DottedLeader()
+                .frame(height: 1)
+                .frame(minWidth: 12)
+            value()
+                .layoutPriority(1)
+        }
+        .padding(.vertical, control ? 5 : 11)
     }
 
     // ── Actions ──────────────────────────────────────────────────────────────
@@ -297,7 +364,6 @@ struct MealEditorView: View {
     private func prepare() async {
         guard !prepared else { return }
         prepared = true
-        draft.kind = .meal
         draft.visibility = SettingsStore.defaultVisibility
         switch mode {
         case .new(let cuisine, let place):
@@ -307,7 +373,7 @@ struct MealEditorView: View {
             }
             if let place { apply(place, chosen: true) }
         case .edit(let meal):
-            draft = MemoryDraft(memory: meal)
+            draft = MealDraft(meal: meal)
             cuisineTouched = true
             placeTouched = true
             dateTouched = true
@@ -383,11 +449,11 @@ struct MealEditorView: View {
         saving = true
         defer { saving = false }
         do {
-            let result = try await app.saveMemory(draft, editing: original, newId: newMemoryId,
-                                                  newPhotos: photos.map(\.jpeg), shareTo: [])
+            let result = try await app.saveMeal(draft, editing: original, newId: newMealId,
+                                                newPhotos: photos.map(\.jpeg), shareTo: [])
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             if let fromPlace, !fromPlace.done { try? await app.updatePlace(fromPlace, done: true) }
-            if result.isNewCountry {
+            if result.isFirstTaste {
                 stampResult = result
             } else {
                 app.celebrate(original == nil ? "\(Country.flag(for: draft.countryCode)) Meal logged" : "Meal updated")
@@ -410,26 +476,22 @@ struct MealEditorView: View {
     }
 }
 
-/// "Log it here" from a saved place: a meal for a restaurant, a memory for
-/// anywhere else. Either way the place gets ticked off.
+/// "I ate here" from a saved restaurant: a meal there, and the restaurant
+/// gets ticked off.
 struct LogAtPlaceSheet: View {
     let place: SavedPlace
 
     var body: some View {
-        if let cuisine = place.cuisineCode {
-            MealEditorView(mode: .new(cuisine: cuisine,
-                                      place: PlaceResult(title: place.title, city: place.city,
-                                                         countryCode: place.countryCode,
-                                                         latitude: place.lat, longitude: place.lng)),
-                           fromPlace: place)
-        } else {
-            MemoryEditorView(mode: .atPlace(place))
-        }
+        MealEditorView(mode: .new(cuisine: place.cuisineCode,
+                                  place: PlaceResult(title: place.title, city: place.city,
+                                                     countryCode: place.countryCode,
+                                                     latitude: place.lat, longitude: place.lng)),
+                       fromPlace: place)
     }
 }
 
 extension AppModel.SaveResult: Identifiable {
-    var id: UUID { memory.id }
+    var id: UUID { meal.id }
 }
 
 /// Choose a cuisine: search by name or dish ("pho" finds Vietnamese), with

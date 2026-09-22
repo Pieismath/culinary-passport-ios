@@ -148,12 +148,12 @@ final class SupabaseBackend: Backend {
             .execute().value
     }
 
-    // ── Memories ─────────────────────────────────────────────────────────────
+    // ── Meals ────────────────────────────────────────────────────────────────
 
-    func memories(userId: UUID) async throws -> [Memory] {
+    func meals(userId: UUID) async throws -> [Meal] {
         try await allPages { from, to in
             try await client.from("entries").select()
-                .eq("kind", value: "memory")
+                .eq("kind", value: "meal")
                 .eq("user_id", value: userId)
                 .order("date_tried", ascending: false)
                 .order("created_at", ascending: false)
@@ -163,28 +163,28 @@ final class SupabaseBackend: Backend {
         }
     }
 
-    func memory(id: UUID) async throws -> Memory? {
-        let rows: [Memory] = try await client.from("entries").select()
-            .in("kind", values: ["memory", "meal"]).eq("id", value: id).limit(1).execute().value
+    func meal(id: UUID) async throws -> Meal? {
+        let rows: [Meal] = try await client.from("entries").select()
+            .eq("kind", value: "meal").eq("id", value: id).limit(1).execute().value
         return rows.first
     }
 
-    func memories(ids: [UUID]) async throws -> [Memory] {
-        var result: [Memory] = []
+    func meals(ids: [UUID]) async throws -> [Meal] {
+        var result: [Meal] = []
         for chunk in chunks(Array(Set(ids))) {
-            let rows: [Memory] = try await client.from("entries").select()
-                .in("kind", values: ["memory", "meal"]).in("id", values: chunk).execute().value
+            let rows: [Meal] = try await client.from("entries").select()
+                .eq("kind", value: "meal").in("id", values: chunk).execute().value
             result += rows
         }
         return result
     }
 
-    func memories(countryCode: String, userIds: [UUID]) async throws -> [Memory] {
+    func meals(countryCode: String, userIds: [UUID]) async throws -> [Meal] {
         guard !userIds.isEmpty else { return [] }
-        var result: [Memory] = []
+        var result: [Meal] = []
         for chunk in chunks(userIds) {
-            let rows: [Memory] = try await client.from("entries").select()
-                .eq("kind", value: "memory")
+            let rows: [Meal] = try await client.from("entries").select()
+                .eq("kind", value: "meal")
                 .eq("country_code", value: countryCode)
                 .in("user_id", values: chunk)
                 .order("date_tried", ascending: false)
@@ -195,35 +195,19 @@ final class SupabaseBackend: Backend {
         return result.sorted { $0.date > $1.date }
     }
 
-    func insertMemory(_ memory: NewMemory) async throws -> Memory {
-        try await client.from("entries").insert(memory).select().single().execute().value
+    func insertMeal(_ meal: NewMeal) async throws -> Meal {
+        try await client.from("entries").insert(meal).select().single().execute().value
     }
 
-    func insertMemories(_ memories: [NewMemory]) async throws -> [Memory] {
-        guard !memories.isEmpty else { return [] }
-        var saved: [Memory] = []
-        for chunk in chunks(memories, size: 50) {
-            let rows: [Memory] = try await client.from("entries").insert(chunk).select().execute().value
-            saved += rows
-        }
-        return saved
-    }
-
-    func deleteMemories(ids: [UUID]) async throws {
-        for chunk in chunks(ids) {
-            try await client.from("entries").delete().in("id", values: chunk).execute()
-        }
-    }
-
-    func updateMemory(id: UUID, _ patch: MemoryPatch) async throws -> Memory {
+    func updateMeal(id: UUID, _ patch: MealPatch) async throws -> Meal {
         try await client.from("entries").update(patch).eq("id", value: id).select().single().execute().value
     }
 
     /// Row first, then its photos (best-effort). The other order could leave
-    /// a memory whose photos were already gone if the row delete failed.
-    func deleteMemory(_ memory: Memory) async throws {
-        try await client.from("entries").delete().eq("id", value: memory.id).execute()
-        await removePhotos(memory.photos)
+    /// a meal whose photos were already gone if the row delete failed.
+    func deleteMeal(_ meal: Meal) async throws {
+        try await client.from("entries").delete().eq("id", value: meal.id).execute()
+        await removePhotos(meal.photos)
     }
 
     func uploadPhoto(_ jpeg: Data) async throws -> String {
@@ -245,101 +229,7 @@ final class SupabaseBackend: Backend {
         try await client.storage.from("photos").download(path: path)
     }
 
-    // ── Stamps + bucket list ─────────────────────────────────────────────────
-
-    func stamps(userIds: [UUID]) async throws -> [Stamp] {
-        var result: [Stamp] = []
-        // 80 well-travelled people is easily more than one response holds.
-        for chunk in chunks(Array(Set(userIds))) {
-            let rows: [Stamp] = try await allPages { from, to in
-                try await client.from("stamps").select()
-                    .in("user_id", values: chunk)
-                    .order("user_id").order("country_code")
-                    .range(from: from, to: to)
-                    .execute().value
-            }
-            result += rows
-        }
-        return result
-    }
-
-    func stamps(countryCode: String, userIds: [UUID]) async throws -> [Stamp] {
-        guard !userIds.isEmpty else { return [] }
-        var result: [Stamp] = []
-        for chunk in chunks(Array(Set(userIds))) {
-            let rows: [Stamp] = try await client.from("stamps").select()
-                .eq("country_code", value: countryCode)
-                .in("user_id", values: chunk).execute().value
-            result += rows
-        }
-        return result
-    }
-
-    func addStamps(_ items: [StampInput]) async throws {
-        guard !items.isEmpty else { return }
-        struct Params: Encodable { let items: [StampInput] }
-        try await client.rpc("add_stamps", params: Params(items: items)).execute()
-    }
-
-    func removeStamp(countryCode: String) async throws {
-        try await client.from("stamps").delete()
-            .eq("user_id", value: uid())
-            .eq("country_code", value: countryCode)
-            .execute()
-    }
-
-    func bucketList() async throws -> Set<String> {
-        struct Row: Decodable { let countryCode: String }
-        let rows: [Row] = try await client.from("wishlist").select("country_code")
-            .eq("user_id", value: uid()).execute().value
-        return Set(rows.map(\.countryCode))
-    }
-
-    func setBucketListed(_ code: String, _ on: Bool) async throws {
-        let me = try await uid()
-        if on {
-            // DO NOTHING on conflict: the table has no UPDATE policy, so a
-            // DO UPDATE upsert fails when the row already exists.
-            try await client.from("wishlist")
-                .upsert(["country_code": code, "user_id": me.uuidString],
-                        onConflict: "country_code,user_id", ignoreDuplicates: true)
-                .execute()
-        } else {
-            try await client.from("wishlist").delete()
-                .eq("country_code", value: code).eq("user_id", value: me).execute()
-        }
-    }
-
-    // ── Meals + tastes ───────────────────────────────────────────────────────
-
-    func meals(userId: UUID) async throws -> [Memory] {
-        try await allPages { from, to in
-            try await client.from("entries").select()
-                .eq("kind", value: "meal")
-                .eq("user_id", value: userId)
-                .order("date_tried", ascending: false)
-                .order("created_at", ascending: false)
-                .order("id")
-                .range(from: from, to: to)
-                .execute().value
-        }
-    }
-
-    func meals(countryCode: String, userIds: [UUID]) async throws -> [Memory] {
-        guard !userIds.isEmpty else { return [] }
-        var result: [Memory] = []
-        for chunk in chunks(userIds) {
-            let rows: [Memory] = try await client.from("entries").select()
-                .eq("kind", value: "meal")
-                .eq("country_code", value: countryCode)
-                .in("user_id", values: chunk)
-                .order("date_tried", ascending: false)
-                .limit(60)
-                .execute().value
-            result += rows
-        }
-        return result.sorted { $0.date > $1.date }
-    }
+    // ── Tastes ───────────────────────────────────────────────────────────────
 
     func tastes(userIds: [UUID]) async throws -> [Taste] {
         var result: [Taste] = []
@@ -369,41 +259,13 @@ final class SupabaseBackend: Backend {
             .execute()
     }
 
-    // ── Trips + saved places ─────────────────────────────────────────────────
-
-    func tripPlans() async throws -> [TripPlan] {
-        try await client.from("trip_plans").select()
-            .order("starts_on", ascending: true, nullsFirst: false)
-            .order("created_at", ascending: false)
-            .execute().value
-    }
-
-    func createTripPlan(_ plan: NewTripPlan) async throws -> TripPlan {
-        try await client.from("trip_plans").insert(plan).select().single().execute().value
-    }
-
-    func createTripPlans(_ plans: [NewTripPlan]) async throws -> [TripPlan] {
-        guard !plans.isEmpty else { return [] }
-        return try await client.from("trip_plans").insert(plans).select().execute().value
-    }
-
-    func deleteTripPlans(ids: [UUID]) async throws {
-        for chunk in chunks(ids) {
-            try await client.from("trip_plans").delete().in("id", values: chunk).execute()
-        }
-    }
-
-    func updateTripPlan(id: UUID, _ patch: TripPlanPatch) async throws -> TripPlan {
-        try await client.from("trip_plans").update(patch).eq("id", value: id).select().single().execute().value
-    }
-
-    func deleteTripPlan(id: UUID) async throws {
-        try await client.from("trip_plans").delete().eq("id", value: id).execute()
-    }
+    // ── Restaurants to try ───────────────────────────────────────────────────
 
     func savedPlaces() async throws -> [SavedPlace] {
         try await allPages { from, to in
             try await client.from("saved_places").select()
+                .eq("user_id", value: uid())
+                .not("cuisine_code", operator: .is, value: "null")
                 .order("created_at", ascending: false)
                 .order("id")
                 .range(from: from, to: to)
@@ -497,17 +359,27 @@ final class SupabaseBackend: Backend {
 
     // ── Feeds ────────────────────────────────────────────────────────────────
 
-    func friendsFeed(before: Date?, limit: Int) async throws -> [Memory] {
+    /// friends_feed still returns travel-era memories too; they're skipped
+    /// here, reading on until a page of meals is full (or the feed ends).
+    func friendsFeed(before: Date?, limit: Int) async throws -> [Meal] {
         struct Params: Encodable { let beforeTs: String?; let pageSize: Int }
-        return try await client.rpc("friends_feed", params: Params(
-            beforeTs: before.map { $0.formatted(Self.cursorStyle) }, pageSize: limit
-        )).execute().value
+        var cursor = before
+        var meals: [Meal] = []
+        for _ in 0..<4 {
+            let page: [Meal] = try await client.rpc("friends_feed", params: Params(
+                beforeTs: cursor.map { $0.formatted(Self.cursorStyle) }, pageSize: limit
+            )).execute().value
+            meals += page.filter(\.isMeal)
+            guard page.count == limit, meals.count < limit, let last = page.last else { break }
+            cursor = last.createdAt
+        }
+        return Array(meals.prefix(limit))
     }
 
-    func discoverFeed(before: Date?, limit: Int) async throws -> [Memory] {
+    func discoverFeed(before: Date?, limit: Int) async throws -> [Meal] {
         let me = try await uid()
         var query = client.from("entries").select()
-            .in("kind", values: ["memory", "meal"])
+            .eq("kind", value: "meal")
             .eq("visibility", value: "public")
             .neq("user_id", value: me)
         if let before {
@@ -516,11 +388,11 @@ final class SupabaseBackend: Backend {
         return try await query.order("created_at", ascending: false).limit(limit).execute().value
     }
 
-    func recentStamps(userIds: [UUID], limit: Int) async throws -> [Stamp] {
+    func recentTastes(userIds: [UUID], limit: Int) async throws -> [Taste] {
         guard !userIds.isEmpty else { return [] }
-        var result: [Stamp] = []
+        var result: [Taste] = []
         for chunk in chunks(Array(Set(userIds))) {
-            let rows: [Stamp] = try await client.from("stamps").select()
+            let rows: [Taste] = try await client.from("tastes").select()
                 .in("user_id", values: chunk)
                 .order("created_at", ascending: false)
                 .limit(limit)
@@ -536,9 +408,9 @@ final class SupabaseBackend: Backend {
 
     // ── Reactions + comments ─────────────────────────────────────────────────
 
-    func reactions(memoryIds: [UUID]) async throws -> [Reaction] {
+    func reactions(mealIds: [UUID]) async throws -> [Reaction] {
         var result: [Reaction] = []
-        for chunk in chunks(Array(Set(memoryIds))) {
+        for chunk in chunks(Array(Set(mealIds))) {
             let rows: [Reaction] = try await client.from("entry_reactions").select()
                 .in("entry_id", values: chunk).execute().value
             result += rows
@@ -546,31 +418,31 @@ final class SupabaseBackend: Backend {
         return result
     }
 
-    func setReaction(memoryId: UUID, emoji: String, on: Bool) async throws {
+    func setReaction(mealId: UUID, emoji: String, on: Bool) async throws {
         let me = try await uid()
         if on {
             try await client.from("entry_reactions")
-                .upsert(["entry_id": memoryId.uuidString, "user_id": me.uuidString, "emoji": emoji],
+                .upsert(["entry_id": mealId.uuidString, "user_id": me.uuidString, "emoji": emoji],
                         onConflict: "entry_id,user_id,emoji", ignoreDuplicates: true)
                 .execute()
         } else {
             try await client.from("entry_reactions").delete()
-                .eq("entry_id", value: memoryId).eq("user_id", value: me).eq("emoji", value: emoji)
+                .eq("entry_id", value: mealId).eq("user_id", value: me).eq("emoji", value: emoji)
                 .execute()
         }
     }
 
-    func comments(memoryId: UUID) async throws -> [Comment] {
+    func comments(mealId: UUID) async throws -> [Comment] {
         try await client.from("entry_comments").select()
-            .eq("entry_id", value: memoryId)
+            .eq("entry_id", value: mealId)
             .order("created_at", ascending: true)
             .execute().value
     }
 
-    func commentCounts(memoryIds: [UUID]) async throws -> [UUID: Int] {
+    func commentCounts(mealIds: [UUID]) async throws -> [UUID: Int] {
         struct Row: Decodable { let entryId: UUID }
         var counts: [UUID: Int] = [:]
-        for chunk in chunks(Array(Set(memoryIds))) {
+        for chunk in chunks(Array(Set(mealIds))) {
             let rows: [Row] = try await client.from("entry_comments").select("entry_id")
                 .in("entry_id", values: chunk).execute().value
             for row in rows { counts[row.entryId, default: 0] += 1 }
@@ -578,10 +450,10 @@ final class SupabaseBackend: Backend {
         return counts
     }
 
-    func addComment(memoryId: UUID, text: String) async throws {
+    func addComment(mealId: UUID, text: String) async throws {
         struct Insert: Encodable { let entryId: UUID; let authorId: UUID; let text: String }
         try await client.from("entry_comments")
-            .insert(Insert(entryId: memoryId, authorId: uid(), text: String(text.prefix(2000))))
+            .insert(Insert(entryId: mealId, authorId: uid(), text: String(text.prefix(2000))))
             .execute()
     }
 
@@ -653,10 +525,28 @@ final class SupabaseBackend: Backend {
         return try await query.order("created_at", ascending: false).limit(limit).execute().value
     }
 
-    func createPost(groupId: UUID, text: String, memoryId: UUID?) async throws {
-        struct Insert: Encodable { let groupId: UUID; let authorId: UUID; let entryId: UUID?; let text: String }
+    func createPost(groupId: UUID, text: String, mealId: UUID?, pick: DinnerPick?) async throws {
+        struct Insert: Encodable {
+            let groupId: UUID
+            let authorId: UUID
+            let entryId: UUID?
+            let text: String
+            let cuisineCode: String?
+            let placeName: String?
+            let placeAddress: String?
+            let placeLat: Double?
+            let placeLng: Double?
+        }
+        // A pick always carries a readable line for older clients and pushes.
+        let body = text.trimmed.isEmpty ? (pick?.fallbackText ?? "") : text
+        let place = pick?.hasPlace == true ? pick : nil
         try await client.from("group_posts")
-            .insert(Insert(groupId: groupId, authorId: uid(), entryId: memoryId, text: String(text.prefix(4000))))
+            .insert(Insert(groupId: groupId, authorId: uid(), entryId: mealId,
+                           text: String(body.prefix(4000)),
+                           cuisineCode: pick?.cuisineCode,
+                           placeName: place?.placeName.map { String($0.prefix(200)) },
+                           placeAddress: place?.placeAddress.map { String($0.prefix(300)) },
+                           placeLat: place?.placeLat, placeLng: place?.placeLng))
             .execute()
     }
 

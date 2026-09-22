@@ -1,9 +1,10 @@
 import Foundation
 
-// Mirrors the Supabase schema (web repo supabase/migrations, travel model in
-// 20260917120000_travel_passport.sql). JSON keys are snake_case on the wire;
-// the shared decoder converts them, so CodingKeys below use camelCase raw
-// values where a Swift name differs from the column's.
+// Mirrors the Supabase schema (web repo supabase/migrations). The app is about
+// food alone: meals (entries of kind 'meal'), the cuisines they taste, and the
+// tables (groups) you eat with. JSON keys are snake_case on the wire; the
+// shared decoder converts them, so CodingKeys below use camelCase raw values
+// where a Swift name differs from the column's.
 
 struct Profile: Codable, Identifiable, Hashable {
     let id: UUID
@@ -16,14 +17,14 @@ struct Profile: Codable, Identifiable, Hashable {
     var avatarUrl: String?
     var isPublic: Bool?
     var createdAt: Date?
-    /// "How many NEW countries this year?" Nil = not set.
+    /// "How many NEW cuisines this year?" Nil = not set.
     var yearlyGoal: Int?
 
     var handle: String? { username.flatMap { $0.isEmpty ? nil : "@\($0)" } }
     var firstName: String { name.split(separator: " ").first.map(String.init) ?? name }
 }
 
-/// Who can see a memory. The raw value `groups` predates the travel app; it
+/// Who can see a meal. The raw value `groups` predates the tables; it
 /// means Friends now — mutual follows or anyone you share a group with.
 enum Visibility: String, Codable, CaseIterable, Identifiable {
     case friends = "groups"
@@ -52,15 +53,16 @@ enum Visibility: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .friends: "People you follow each other with, and your groups."
         case .public: "Anyone on Stampd, including Discover."
-        case .private: "Just you. It still stamps your passport."
+        case .private: "Just you. It still counts on your globe."
         }
     }
 }
 
-/// A travel moment or a meal: photos, a place, a date, a few words. Stored as
-/// an `entries` row — kind = 'memory' stamps the country Visited, kind =
-/// 'meal' stamps its cuisine Tasted (countryCode is the cuisine's country).
-struct Memory: Codable, Identifiable, Hashable {
+/// A meal: photos, the restaurant, the dish, a date, a few words. Stored as an
+/// `entries` row of kind 'meal'; countryCode is the cuisine's country (a
+/// Georgian dinner in San Francisco is GE). Rows of kind 'memory' are from the
+/// travel era — still decodable, never loaded.
+struct Meal: Codable, Identifiable, Hashable {
     enum Kind: String, Codable { case memory, meal }
 
     let id: UUID
@@ -90,7 +92,7 @@ struct Memory: Codable, Identifiable, Hashable {
 
     init(id: UUID, userId: UUID, countryCode: String, title: String, city: String?,
          date: String, notes: String?, photos: [String], lat: Double?, lng: Double?,
-         visibility: Visibility, createdAt: Date, kind: Kind = .memory,
+         visibility: Visibility, createdAt: Date, kind: Kind = .meal,
          restaurantName: String = "", dish: String = "") {
         self.id = id
         self.userId = userId
@@ -113,7 +115,7 @@ struct Memory: Codable, Identifiable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         userId = try c.decode(UUID.self, forKey: .userId)
-        kind = (try? c.decode(Kind.self, forKey: .kind)) ?? .memory
+        kind = (try? c.decode(Kind.self, forKey: .kind)) ?? .meal
         restaurantName = try c.decodeIfPresent(String.self, forKey: .restaurantName) ?? ""
         dish = try c.decodeIfPresent(String.self, forKey: .dish) ?? ""
         countryCode = try c.decode(String.self, forKey: .countryCode)
@@ -160,14 +162,14 @@ struct Memory: Codable, Identifiable, Hashable {
         return parts.joined(separator: ", ")
     }
 
-    /// "🇬🇪 Georgian at Supra" for a meal, "🇯🇵 Kyoto, Japan" for a memory.
+    /// "🇬🇪 Georgian at Supra" (a travel-era memory: "🇯🇵 Kyoto, Japan").
     var feedLine: String {
         guard isMeal else { return "\(country?.flag ?? "") \(placeLine)" }
         let cuisine = "\(Country.flag(for: countryCode)) \(Cuisine.name(for: countryCode))"
         return restaurantName.isEmpty ? cuisine : "\(cuisine) at \(restaurantName)"
     }
 
-    /// "🇬🇪 Georgian" for a meal, "🇯🇵 Japan" for a memory.
+    /// "🇬🇪 Georgian" (a travel-era memory: "🇯🇵 Japan").
     var stampLine: String {
         "\(Country.flag(for: countryCode)) \(isMeal ? Cuisine.name(for: countryCode) : country?.name ?? countryCode)"
     }
@@ -177,7 +179,7 @@ struct Memory: Codable, Identifiable, Hashable {
 
     /// Whether this row already holds every field of `patch` (an update whose
     /// response was lost may still have landed).
-    func matches(_ patch: MemoryPatch) -> Bool {
+    func matches(_ patch: MealPatch) -> Bool {
         countryCode == patch.countryCode && title == patch.title && (city ?? "") == patch.city
             && restaurantName == patch.restaurantName && dish == patch.signatureDish
             && String(date.prefix(10)) == patch.dateTried && (notes ?? "") == patch.notes
@@ -188,10 +190,10 @@ struct Memory: Codable, Identifiable, Hashable {
 
 /// Insert payload. The id is chosen on the device so a retried save can't
 /// land twice; created_at comes from Postgres.
-struct NewMemory: Encodable {
+struct NewMeal: Encodable {
     let id: UUID
     let userId: UUID
-    var kind = "memory"
+    var kind = "meal"
     var countryCode: String
     var title: String
     var city: String
@@ -207,7 +209,7 @@ struct NewMemory: Encodable {
 
 /// Full replacement of the editable fields. Encodes nil coordinates as
 /// explicit nulls — clearing a place must clear the stored coordinates too.
-struct MemoryPatch: Encodable {
+struct MealPatch: Encodable {
     var countryCode: String
     var title: String
     var city: String
@@ -241,9 +243,9 @@ struct MemoryPatch: Encodable {
     }
 }
 
-/// A cuisine you've tasted (`tastes`) — the Tasted twin of a Stamp. Refitted
-/// from your meals on the server; a cuisine ticked on the checklist has no
-/// meals or dates.
+/// A cuisine you've tasted (`tastes`) — a stamp in the food passport.
+/// Refitted from your meals on the server; a cuisine ticked on the checklist
+/// has no meals or dates.
 struct Taste: Codable, Identifiable, Hashable {
     enum Source: String, Codable { case manual, meal }
 
@@ -292,41 +294,6 @@ struct Taste: Codable, Identifiable, Hashable {
     }
 }
 
-/// A passport stamp: "been to this country", with or without memories.
-struct Stamp: Codable, Identifiable, Hashable {
-    enum Source: String, Codable { case manual, photos, memory }
-
-    let userId: UUID
-    let countryCode: String
-    var firstVisited: String?
-    var lastVisited: String?
-    var source: Source
-    let createdAt: Date
-
-    var id: String { "\(userId.uuidString)|\(countryCode)" }
-    var country: Country? { CountryStore.byCode[countryCode] }
-
-    /// "2019" or "2019 – 2024", nil when we don't know.
-    var yearsText: String? {
-        let first = firstVisited.map { String($0.prefix(4)) }
-        let last = lastVisited.map { String($0.prefix(4)) }
-        switch (first, last) {
-        case let (f?, l?) where f != l: return "\(f) – \(l)"
-        case let (f?, _): return f
-        case let (nil, l?): return l
-        default: return nil
-        }
-    }
-}
-
-/// One stamp to add in bulk (checklist / photo import).
-struct StampInput: Codable, Hashable {
-    var countryCode: String
-    var firstVisited: String?
-    var lastVisited: String?
-    var source: Stamp.Source
-}
-
 struct Group: Codable, Identifiable, Hashable {
     let id: UUID
     var name: String
@@ -345,15 +312,84 @@ struct GroupMember: Codable, Hashable {
     enum Role: String, Codable { case owner, member }
 }
 
+/// A message at a table. It can carry a shared meal (entryId) or a dinner
+/// pick: the cuisine a spin landed on, and optionally the restaurant someone
+/// suggests for it. Members answer a pick with the 🙋 reaction ("I'm in").
 struct GroupPost: Codable, Identifiable, Hashable {
     let id: UUID
     let groupId: UUID
     let authorId: UUID
-    /// A shared memory (group_posts.entry_id).
+    /// A shared meal (group_posts.entry_id).
     var entryId: UUID?
     var text: String
     var photos: [String]
     let createdAt: Date
+    var cuisineCode: String?
+    var placeName: String?
+    var placeAddress: String?
+    var placeLat: Double?
+    var placeLng: Double?
+
+    static let imIn = "🙋"
+
+    init(id: UUID, groupId: UUID, authorId: UUID, entryId: UUID?, text: String, photos: [String],
+         createdAt: Date, pick: DinnerPick? = nil) {
+        self.id = id
+        self.groupId = groupId
+        self.authorId = authorId
+        self.entryId = entryId
+        self.text = text
+        self.photos = photos
+        self.createdAt = createdAt
+        cuisineCode = pick?.cuisineCode
+        placeName = pick?.placeName
+        placeAddress = pick?.placeAddress
+        placeLat = pick?.placeLat
+        placeLng = pick?.placeLng
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        groupId = try c.decode(UUID.self, forKey: .groupId)
+        authorId = try c.decode(UUID.self, forKey: .authorId)
+        entryId = try c.decodeIfPresent(UUID.self, forKey: .entryId)
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        photos = try c.decodeIfPresent([String].self, forKey: .photos) ?? []
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        cuisineCode = try c.decodeIfPresent(String.self, forKey: .cuisineCode)
+        placeName = try c.decodeIfPresent(String.self, forKey: .placeName)
+        placeAddress = try c.decodeIfPresent(String.self, forKey: .placeAddress)
+        placeLat = try c.decodeIfPresent(Double.self, forKey: .placeLat)
+        placeLng = try c.decodeIfPresent(Double.self, forKey: .placeLng)
+    }
+
+    /// The dinner pick this message carries, if any.
+    var pick: DinnerPick? {
+        guard let cuisineCode else { return nil }
+        return DinnerPick(cuisineCode: cuisineCode, placeName: placeName, placeAddress: placeAddress,
+                          placeLat: placeLat, placeLng: placeLng)
+    }
+}
+
+/// "Ethiopian tonight?" — optionally "at Walia, 12 Main St". The restaurant's
+/// coordinates are the business's, never the poster's.
+struct DinnerPick: Codable, Hashable {
+    var cuisineCode: String
+    var placeName: String?
+    var placeAddress: String?
+    var placeLat: Double?
+    var placeLng: Double?
+
+    var hasPlace: Bool { !(placeName ?? "").trimmed.isEmpty }
+    var hasCoordinate: Bool { placeLat != nil && placeLng != nil }
+
+    /// What older clients and push previews show.
+    var fallbackText: String {
+        let cuisine = "\(Country.flag(for: cuisineCode)) \(Cuisine.name(for: cuisineCode))"
+        if let placeName, hasPlace { return "\(cuisine) at \(placeName)?" }
+        return "🎲 The globe says \(cuisine) tonight"
+    }
 }
 
 struct PostComment: Codable, Identifiable, Hashable {
@@ -371,7 +407,7 @@ struct PostReaction: Codable, Hashable {
     let emoji: String
 }
 
-/// An emoji reaction on a memory (entry_reactions).
+/// An emoji reaction on a meal (entry_reactions).
 struct Reaction: Codable, Hashable {
     let entryId: UUID
     let userId: UUID
@@ -379,7 +415,7 @@ struct Reaction: Codable, Hashable {
     let createdAt: Date?
 }
 
-/// A comment on a memory (entry_comments).
+/// A comment on a meal (entry_comments).
 struct Comment: Codable, Identifiable, Hashable {
     let id: UUID
     let entryId: UUID
@@ -410,7 +446,7 @@ struct ActivityRow: Codable, Hashable, Identifiable {
     }
 }
 
-/// Tallied emoji on a memory or message: most-used first, then stable.
+/// Tallied emoji on a meal or message: most-used first, then stable.
 struct ReactionTally: Identifiable, Hashable {
     let emoji: String
     let count: Int
@@ -437,7 +473,7 @@ extension Int {
 // ── Dates ───────────────────────────────────────────────────────────────────
 
 /// Calendar days as Postgres `date` strings, Gregorian in the device's time
-/// zone: a memory from "12 April" stays on 12 April.
+/// zone: a meal from "12 April" stays on 12 April.
 enum DayFormat {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var cachedCalendar = Calendar(identifier: .gregorian)

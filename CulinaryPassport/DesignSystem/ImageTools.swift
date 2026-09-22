@@ -28,7 +28,7 @@ enum ImageTools {
         return cropped.jpegData(compressionQuality: quality)
     }
 
-    /// A memory photo ready to upload: longest edge capped, re-encoded as
+    /// A meal photo ready to upload: longest edge capped, re-encoded as
     /// JPEG. Re-encoding also drops EXIF — the exact GPS a photo carries is
     /// read on-device for the place suggestion and never shared with viewers.
     static func uploadJPEG(from data: Data, maxDimension: CGFloat = 2048, quality: CGFloat = 0.8) -> (jpeg: Data, preview: UIImage)? {

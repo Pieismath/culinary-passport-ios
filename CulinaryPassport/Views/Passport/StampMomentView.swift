@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// The payoff: a new country slams onto the page. One country gets the big
-/// postage stamp; a batch (photo import, checklist) fills a page of stamps.
-/// Either way there's a share card, rendered once — not on every redraw.
+/// The payoff: a new cuisine slams onto the page. One gets the big postage
+/// stamp; a batch (the checklist) fills a page of stamps. Either way there's
+/// a share card, rendered once — not on every redraw.
 struct StampMomentView: View {
     let codes: [String]
     var number: Int?
@@ -99,8 +99,11 @@ struct StampMomentView: View {
     }
 
     private var shareTitle: String {
-        if let code = single { return "\(Country.flag(for: code)) \(CountryStore.byCode[code]?.name ?? code) — stamped" }
-        return "\(codes.count) new stamps in my passport"
+        if let code = single {
+            return tasted ? "\(Country.flag(for: code)) My first \(Cuisine.name(for: code)) meal"
+                          : "\(Country.flag(for: code)) \(CountryStore.byCode[code]?.name ?? code) — stamped"
+        }
+        return tasted ? "\(codes.count.counted("cuisine")) in my food passport" : "\(codes.count) new stamps in my passport"
     }
 
     private func animateIn() {
@@ -122,10 +125,10 @@ struct StampMomentView: View {
     private func renderShareCard() {
         let card = ShareCard {
             if let code = single {
-                PostageStamp(code: code, number: number, date: date.map(DayFormat.pretty), width: 300)
+                PostageStamp(code: code, number: number, date: date.map(DayFormat.pretty), width: 300, tasted: tasted)
             } else {
                 VStack(spacing: 14) {
-                    Text("\(codes.count) new stamps")
+                    Text(tasted ? "\(codes.count.counted("cuisine")) tasted" : "\(codes.count) new stamps")
                         .font(.system(size: 34, weight: .semibold, design: .serif))
                     LazyVGrid(columns: Array(repeating: GridItem(.fixed(104)), count: 3), spacing: 12) {
                         ForEach(codes.prefix(9), id: \.self) { StampBadge(code: $0, size: 100, tasted: tasted) }

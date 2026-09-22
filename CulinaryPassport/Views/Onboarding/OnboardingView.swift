@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// First run, three short steps: who you are, where you've been (the photo
-/// scan does the heavy lifting), and who you travel with. Skippable
-/// throughout — a welcome, not a toll gate.
+/// First run, three short steps: who you are, what you've already eaten (tap
+/// the plates), and who you eat with. Skippable throughout — a welcome, not
+/// a toll gate.
 struct OnboardingView: View {
     enum Step: Int, CaseIterable {
-        case welcome, passport, friends
+        case welcome, tasted, tables
     }
 
     @Environment(AppModel.self) private var app
@@ -14,18 +14,12 @@ struct OnboardingView: View {
     @State private var homeCountry: String?
     @State private var color = GroupPalette.fallbacks[1]
     @State private var pickingHome = false
-    @State private var showImport = false
-    @State private var showChecklist = false
-    @State private var showCuisines = false
-    @State private var tasteBaseline = 0
+    @State private var picked: Set<String> = []
+    @State private var savingTastes = false
     @State private var showPeople = false
     @State private var joinCode = ""
     @State private var joining = false
     @State private var loaded = false
-    /// Stamps and trips before a scan/checklist opened — the home country is
-    /// stamped on Continue, so "any stamps" can't mean "they built a passport".
-    @State private var stampBaseline = 0
-    @State private var tripBaseline = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,8 +37,8 @@ struct OnboardingView: View {
             ZStack {
                 switch step {
                 case .welcome: welcome.transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
-                case .passport: passport.transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
-                case .friends: friends.transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+                case .tasted: tasted.transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+                case .tables: tables.transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
                 }
             }
             .animation(.spring(response: 0.4, dampingFraction: 0.9), value: step)
@@ -52,32 +46,6 @@ struct OnboardingView: View {
         .paperBackground()
         .sheet(isPresented: $pickingHome) {
             CountryPickerSheet(title: "Where's home?", selected: homeCountry) { homeCountry = $0 }
-        }
-        .sheet(isPresented: $showImport) {
-            NavigationStack {
-                PhotoImportView(onDone: {
-                    showImport = false
-                    if app.stamps.count > stampBaseline || app.tripPlans.count > tripBaseline {
-                        step = .friends
-                    }
-                })
-            }
-        }
-        .sheet(isPresented: $showChecklist) {
-            NavigationStack {
-                CountryChecklistView(onDone: {
-                    showChecklist = false
-                    if app.stamps.count > stampBaseline { step = .friends }
-                })
-            }
-        }
-        .sheet(isPresented: $showCuisines) {
-            NavigationStack {
-                CuisineChecklistView(onDone: {
-                    showCuisines = false
-                    if app.tastes.count > tasteBaseline { step = .friends }
-                })
-            }
         }
         .sheet(isPresented: $showPeople) { PeopleSearchView() }
         .onAppear(perform: prefill)
@@ -88,16 +56,27 @@ struct OnboardingView: View {
     private var welcome: some View {
         ScrollView {
             VStack(spacing: 22) {
-                Image("BrandMark")
-                    .resizable()
-                    .frame(width: 88, height: 88)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .padding(.top, 30)
+                ZStack {
+                    Plate(rim: 0.16, band: Color.brand.opacity(0.3)) {
+                        Image(systemName: "globe.europe.africa.fill")
+                            .font(.system(size: 64, weight: .light))
+                            .foregroundStyle(Color.brand.opacity(0.85))
+                    }
+                    .frame(width: 150, height: 150)
+                    Image(systemName: "fork.knife")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.onBrand)
+                        .frame(width: 42, height: 42)
+                        .background(Color.brand, in: Circle())
+                        .offset(x: 58, y: 52)
+                }
+                .padding(.top, 26)
                 VStack(spacing: 8) {
-                    Text("Welcome to Stampd")
+                    Text("How much of the world have you eaten?")
                         .font(.displayLarge)
                         .foregroundStyle(Color.ink)
-                    Text("Your passport for everywhere you've been — and everywhere you're going.")
+                        .multilineTextAlignment(.center)
+                    Text("Every cuisine you try gets a stamp and fills in your globe. Spin it when you can't decide — it lands on something you've never had.")
                         .font(.body)
                         .foregroundStyle(Color.inkSecondary)
                         .multilineTextAlignment(.center)
@@ -112,7 +91,7 @@ struct OnboardingView: View {
                     Button { pickingHome = true } label: {
                         HStack {
                             Image(systemName: "house").foregroundStyle(Color.inkSecondary)
-                            Text("Home").foregroundStyle(Color.ink)
+                            Text("Home kitchen").foregroundStyle(Color.ink)
                             Spacer()
                             Text(homeCountry.flatMap { CountryStore.byCode[$0] }.map { "\($0.flag) \($0.name)" } ?? "Choose country")
                                 .foregroundStyle(homeCountry == nil ? Color.brand : Color.inkSecondary)
@@ -127,7 +106,7 @@ struct OnboardingView: View {
                     .strokeBorder(Color.hairline.opacity(0.7), lineWidth: 0.5))
 
                 VStack(alignment: .leading, spacing: 10) {
-                    Eyebrow(text: "Your color on the globe")
+                    Eyebrow(text: "Your colour on the globe")
                     HStack(spacing: 10) {
                         ForEach(GroupPalette.fallbacks, id: \.self) { swatch in
                             Button {
@@ -144,7 +123,7 @@ struct OnboardingView: View {
                                     }
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Color \(swatch)")
+                            .accessibilityLabel("Colour \(swatch)")
                             .accessibilityAddTraits(swatch == color ? .isSelected : [])
                         }
                     }
@@ -153,7 +132,9 @@ struct OnboardingView: View {
 
                 Button("Continue") {
                     Task { await saveIdentity() }
-                    step = .passport
+                    // Your home cuisine is a fair guess for your first stamp.
+                    if let homeCountry, Cuisine.isCuisine(homeCountry) { picked.insert(homeCountry) }
+                    step = .tasted
                 }
                 .buttonStyle(.primary)
                 .disabled(name.trimmed.isEmpty)
@@ -164,115 +145,67 @@ struct OnboardingView: View {
         .scrollDismissesKeyboard(.interactively)
     }
 
-    // ── 2. Build the passport ────────────────────────────────────────────────
+    // ── 2. What you've eaten ─────────────────────────────────────────────────
 
-    private var passport: some View {
+    private var tasted: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                VStack(spacing: 8) {
-                    Text("Start your passport")
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("What have you already eaten?")
                         .font(.displayLarge)
                         .foregroundStyle(Color.ink)
-                        .multilineTextAlignment(.center)
-                    Text("Every country has two stamps: one for eating its food, one for going there.")
+                    Text("Tap every cuisine you've tried. It takes a minute, and you can add more any time.")
                         .font(.body)
                         .foregroundStyle(Color.inkSecondary)
-                        .multilineTextAlignment(.center)
                 }
-                .padding(.top, 36)
+                .padding(.top, 26)
+                CuisineChecklistView(picked: $picked)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
+        }
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 8) {
+                Button(savingTastes ? "Saving…" : (picked.isEmpty ? "Skip for now" : "That's \(picked.count.counted("cuisine")) — continue")) {
+                    Task { await saveTastes() }
+                }
+                .buttonStyle(.primary)
+                .disabled(savingTastes)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 10)
+            .background(.bar)
+        }
+    }
 
-                optionCard(icon: "fork.knife",
-                           title: "Cuisines I've tried",
-                           detail: "Tap the food you've eaten — Thai, Ethiopian, Georgian… It takes a minute.",
-                           badge: "Fastest") {
-                    tasteBaseline = app.tastes.count
-                    showCuisines = true
-                }
-                optionCard(icon: "sparkle.magnifyingglass",
-                           title: "Read my photos",
-                           detail: "Finds your trips — countries, cities and dates. It happens on your phone, and nothing is uploaded.",
-                           badge: nil) {
-                    stampBaseline = app.stamps.count
-                    tripBaseline = app.tripPlans.count
-                    showImport = true
-                }
-                optionCard(icon: "globe",
-                           title: "Countries I've been to",
-                           detail: "Tap the places you've been, continent by continent.",
-                           badge: nil) {
-                    stampBaseline = app.stamps.count
-                    tripBaseline = app.tripPlans.count
-                    showChecklist = true
-                }
+    // ── 3. Tables ────────────────────────────────────────────────────────────
 
-                if !app.stamps.isEmpty || !app.tastes.isEmpty {
-                    Text("\(app.stats.cuisines.counted("cuisine")) · \(app.stats.countries.counted("country", "countries")) so far")
-                        .font(.subheadline.weight(.semibold))
+    private var tables: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                RoundTable(seats: [TableSeat(id: "me", profile: app.me)] + (1..<4).map { TableSeat.empty($0) },
+                           cloth: Color(hex: color), seatSize: 34) {
+                    Image(systemName: "globe.europe.africa.fill")
+                        .font(.system(size: 34, weight: .light))
                         .foregroundStyle(Color.brand)
-                    Button("Continue") { step = .friends }
-                        .buttonStyle(.primary)
-                } else {
-                    Button("Skip for now") { step = .friends }
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Color.inkSecondary)
-                        .padding(.top, 4)
                 }
-            }
-            .padding(24)
-        }
-    }
-
-    private func optionCard(icon: String, title: String, detail: String, badge: String?,
-                            action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 16) {
-                Image(systemName: icon)
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(Color.brand)
-                    .frame(width: 56, height: 56)
-                    .background(Color.brandSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        Text(title).font(.headline).foregroundStyle(Color.ink)
-                        if let badge {
-                            Pill(text: badge, tint: .brand, background: .brandSoft)
-                        }
-                    }
-                    Text(detail)
-                        .font(.subheadline)
-                        .foregroundStyle(Color.inkSecondary)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(Color.inkTertiary)
-            }
-            .card()
-        }
-        .buttonStyle(.plain)
-    }
-
-    // ── 3. Friends ───────────────────────────────────────────────────────────
-
-    private var friends: some View {
-        ScrollView {
-            VStack(spacing: 20) {
+                .frame(width: 200, height: 200)
+                .padding(.top, 26)
                 VStack(spacing: 8) {
-                    Text("Travel with friends")
+                    Text("Pull up a chair")
                         .font(.displayLarge)
                         .foregroundStyle(Color.ink)
                         .multilineTextAlignment(.center)
-                    Text("See where your friends have been, ask them for tips, and plan the next trip on a shared globe.")
+                    Text("Set a table for the people you eat with. The spin lands on something none of you has had, and you talk it over right there.")
                         .font(.body)
                         .foregroundStyle(Color.inkSecondary)
                         .multilineTextAlignment(.center)
                 }
-                .padding(.top, 36)
 
                 VStack(alignment: .leading, spacing: 10) {
                     Eyebrow(text: "Got an invite code?")
                     HStack(spacing: 10) {
-                        TextField("e.g. europe2027", text: $joinCode)
+                        TextField("e.g. fridaydinner", text: $joinCode)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .font(.body.monospaced())
@@ -295,7 +228,7 @@ struct OnboardingView: View {
                 }
                 .buttonStyle(.secondary)
 
-                Button("Start exploring") { finish() }
+                Button("Start spinning") { finish() }
                     .buttonStyle(.primary)
                     .padding(.top, 10)
             }
@@ -322,10 +255,23 @@ struct OnboardingView: View {
     private func saveIdentity() async {
         do {
             try await app.updateProfile(ProfilePatch(name: name.trimmed, color: color, homeCountry: homeCountry))
-            if let home = homeCountry, !app.visitedCodes.contains(home) {
-                // Home counts: you've been there.
-                try? await app.addStamps([StampInput(countryCode: home, firstVisited: nil, lastVisited: nil, source: .manual)])
-            }
+        } catch {
+            app.show(error)
+        }
+    }
+
+    private func saveTastes() async {
+        let fresh = Array(picked.subtracting(app.tastedCodes))
+        guard !fresh.isEmpty else {
+            step = .tables
+            return
+        }
+        savingTastes = true
+        defer { savingTastes = false }
+        do {
+            try await app.addTastes(fresh)
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            step = .tables
         } catch {
             app.show(error)
         }
@@ -337,7 +283,7 @@ struct OnboardingView: View {
         do {
             try await app.joinGroup(code: joinCode.trimmed)
             joinCode = ""
-            app.celebrate("You're in! Find it under Groups.")
+            app.celebrate("You're in! Find it under Tables.")
         } catch {
             app.show(error)
         }
@@ -345,7 +291,7 @@ struct OnboardingView: View {
 
     private func finish() {
         if let id = app.myId { Onboarding.markDone(for: id) }
-        app.backend.logEvent("onboarding_done", props: ["stamps": String(app.stamps.count)])
+        app.backend.logEvent("onboarding_done", props: ["cuisines": String(app.tastes.count)])
         app.needsOnboarding = false
     }
 }

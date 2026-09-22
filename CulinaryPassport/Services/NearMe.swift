@@ -1,6 +1,6 @@
 import CoreLocation
 
-/// Where the traveller is right now, asked for once and only when a feature
+/// Where you are right now, asked for once and only when a feature
 /// needs it (restaurants near you). Never stored, never sent anywhere.
 @MainActor
 final class NearMe: NSObject, CLLocationManagerDelegate {

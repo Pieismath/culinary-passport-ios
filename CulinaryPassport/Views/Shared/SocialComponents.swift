@@ -28,13 +28,13 @@ struct EmojiPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 8)
 
-    static let quick = ["❤️", "😍", "🔥", "🙌"]
+    static let quick = ["❤️", "🤤", "🔥", "🙌"]
 
     private static let sections: [(title: String, emoji: [String])] = [
-        ("Reactions", ["❤️", "😍", "🔥", "🙌", "👏", "😂", "🥹", "😮", "🤩", "💯", "✨", "🎉", "👀", "🫶", "🙏", "👍"]),
-        ("Travel", ["✈️", "🌍", "🌏", "🌎", "🗺️", "📍", "🧳", "🚆", "🚗", "⛵️", "🏝️", "⛰️", "🏔️", "🏕️", "🏙️", "🌃",
-                    "🌅", "🌄", "🏛️", "🏯", "🗼", "🗽", "⛩️", "🕌", "🎡", "🎢", "🏖️", "🌋", "🏜️", "🛶", "🎒", "📸"]),
-        ("Food & drink", ["🍜", "🍣", "🍕", "🌮", "🥐", "🥘", "🍝", "🍦", "☕️", "🍷", "🍹", "🍺"]),
+        ("Reactions", ["❤️", "🤤", "😍", "🔥", "🙌", "👏", "😂", "🥹", "😮", "🤩", "💯", "✨", "🎉", "👀", "🙋", "👍"]),
+        ("Food", ["🍜", "🍣", "🍕", "🌮", "🥟", "🍛", "🥘", "🍝", "🥙", "🍢", "🍤", "🥗", "🫓", "🌯", "🍔", "🍟",
+                  "🥐", "🧀", "🥩", "🍗", "🍚", "🍲", "🫕", "🥞", "🧁", "🍰", "🍦", "🍩", "🌶️", "🧄", "🥑", "🍋"]),
+        ("Drinks", ["☕️", "🍵", "🧋", "🍷", "🍹", "🍺", "🍶", "🥂", "🧃", "🥤"]),
         ("Feelings", ["🥵", "🥶", "🤯", "😭", "😅", "😴", "🫠", "🥳", "🤝", "💪", "🫡", "😎"]),
     ]
 
@@ -137,9 +137,9 @@ struct ReactionBar: View {
     }
 }
 
-/// Comments under a memory: read, add, delete your own, report others'.
+/// Comments under a meal: read, add, delete your own, report others'.
 struct CommentsSection: View {
-    let memory: Memory
+    let meal: Meal
 
     @Environment(AppModel.self) private var app
     @State private var comments: [Comment] = []
@@ -148,7 +148,7 @@ struct CommentsSection: View {
     @State private var loaded = false
     @FocusState private var focused: Bool
 
-    private var canModerate: Bool { memory.userId == app.myId }
+    private var canModerate: Bool { meal.userId == app.myId }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -167,7 +167,7 @@ struct CommentsSection: View {
                     AvatarView(profile: app.profile(comment.authorId), size: 30)
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 6) {
-                            Text(app.profile(comment.authorId)?.name ?? "Traveller")
+                            Text(app.profile(comment.authorId)?.name ?? "Someone")
                                 .font(.subheadline.weight(.semibold))
                             Text(RelativeTime.short(comment.createdAt))
                                 .font(.caption)
@@ -213,11 +213,11 @@ struct CommentsSection: View {
                 .accessibilityLabel("Send comment")
             }
         }
-        .task(id: memory.id) { await load() }
+        .task(id: meal.id) { await load() }
     }
 
     private func load() async {
-        let fetched = (try? await app.backend.comments(memoryId: memory.id)) ?? []
+        let fetched = (try? await app.backend.comments(mealId: meal.id)) ?? []
         _ = await app.profiles(for: fetched.map(\.authorId))
         comments = fetched
         loaded = true
@@ -229,7 +229,7 @@ struct CommentsSection: View {
         sending = true
         defer { sending = false }
         do {
-            try await app.backend.addComment(memoryId: memory.id, text: text)
+            try await app.backend.addComment(mealId: meal.id, text: text)
             draft = ""
             app.backend.logEvent("comment_added", props: nil)
             await load()
@@ -250,7 +250,7 @@ struct CommentsSection: View {
     }
 }
 
-/// Report with a short reason — used for memories, profiles and messages.
+/// Report with a short reason — used for meals, profiles and messages.
 struct ReportSheet: View {
     let title: String
     let onSubmit: (String) -> Void

@@ -21,44 +21,25 @@ protocol Backend: AnyObject {
     func uploadAvatar(_ jpeg: Data) async throws -> String
     func searchProfiles(_ query: String) async throws -> [Profile]
 
-    // ── Memories ─────────────────────────────────────────────────────────────
-    func memories(userId: UUID) async throws -> [Memory]
-    func memory(id: UUID) async throws -> Memory?
-    func memories(ids: [UUID]) async throws -> [Memory]
-    func memories(countryCode: String, userIds: [UUID]) async throws -> [Memory]
-    func insertMemory(_ memory: NewMemory) async throws -> Memory
-    /// Bulk create, for the photo-library import (one round trip, not fifty).
-    func insertMemories(_ memories: [NewMemory]) async throws -> [Memory]
-    func deleteMemories(ids: [UUID]) async throws
-    func updateMemory(id: UUID, _ patch: MemoryPatch) async throws -> Memory
-    func deleteMemory(_ memory: Memory) async throws
+    // ── Meals ────────────────────────────────────────────────────────────────
+    /// Meals are entries with kind = 'meal'; their countryCode is the cuisine.
+    func meals(userId: UUID) async throws -> [Meal]
+    func meal(id: UUID) async throws -> Meal?
+    func meals(ids: [UUID]) async throws -> [Meal]
+    func meals(countryCode: String, userIds: [UUID]) async throws -> [Meal]
+    func insertMeal(_ meal: NewMeal) async throws -> Meal
+    func updateMeal(id: UUID, _ patch: MealPatch) async throws -> Meal
+    func deleteMeal(_ meal: Meal) async throws
     func uploadPhoto(_ jpeg: Data) async throws -> String
     func removePhotos(_ paths: [String]) async
     func photoData(path: String) async throws -> Data
 
-    // ── Stamps + bucket list ─────────────────────────────────────────────────
-    func stamps(userIds: [UUID]) async throws -> [Stamp]
-    func stamps(countryCode: String, userIds: [UUID]) async throws -> [Stamp]
-    func addStamps(_ items: [StampInput]) async throws
-    func removeStamp(countryCode: String) async throws
-    func bucketList() async throws -> Set<String>
-    func setBucketListed(_ code: String, _ on: Bool) async throws
-
-    // ── Meals + tastes ───────────────────────────────────────────────────────
-    /// Meals are entries with kind = 'meal'; their countryCode is the cuisine.
-    func meals(userId: UUID) async throws -> [Memory]
-    func meals(countryCode: String, userIds: [UUID]) async throws -> [Memory]
+    // ── Tastes ───────────────────────────────────────────────────────────────
     func tastes(userIds: [UUID]) async throws -> [Taste]
     func addTastes(_ codes: [String]) async throws
     func removeTaste(countryCode: String) async throws
 
-    // ── Trips + saved places ─────────────────────────────────────────────────
-    func tripPlans() async throws -> [TripPlan]
-    func createTripPlan(_ plan: NewTripPlan) async throws -> TripPlan
-    func createTripPlans(_ plans: [NewTripPlan]) async throws -> [TripPlan]
-    func deleteTripPlans(ids: [UUID]) async throws
-    func updateTripPlan(id: UUID, _ patch: TripPlanPatch) async throws -> TripPlan
-    func deleteTripPlan(id: UUID) async throws
+    // ── Restaurants to try ───────────────────────────────────────────────────
     func savedPlaces() async throws -> [SavedPlace]
     func savePlace(_ place: NewSavedPlace) async throws -> SavedPlace
     func updateSavedPlace(id: UUID, _ patch: SavedPlacePatch) async throws -> SavedPlace
@@ -74,18 +55,19 @@ protocol Backend: AnyObject {
     func report(contentType: String, contentId: UUID, reason: String) async throws
 
     // ── Feeds ────────────────────────────────────────────────────────────────
-    func friendsFeed(before: Date?, limit: Int) async throws -> [Memory]
-    func discoverFeed(before: Date?, limit: Int) async throws -> [Memory]
-    /// Recent stamps from people you follow (the "Maya stamped Portugal" strip).
-    func recentStamps(userIds: [UUID], limit: Int) async throws -> [Stamp]
+    /// Friends' meals, newest first.
+    func friendsFeed(before: Date?, limit: Int) async throws -> [Meal]
+    func discoverFeed(before: Date?, limit: Int) async throws -> [Meal]
+    /// Cuisines people you follow tasted lately ("Maya tasted Burmese").
+    func recentTastes(userIds: [UUID], limit: Int) async throws -> [Taste]
     func activity(limit: Int) async throws -> [ActivityRow]
 
-    // ── Reactions + comments on memories ─────────────────────────────────────
-    func reactions(memoryIds: [UUID]) async throws -> [Reaction]
-    func setReaction(memoryId: UUID, emoji: String, on: Bool) async throws
-    func comments(memoryId: UUID) async throws -> [Comment]
-    func commentCounts(memoryIds: [UUID]) async throws -> [UUID: Int]
-    func addComment(memoryId: UUID, text: String) async throws
+    // ── Reactions + comments on meals ────────────────────────────────────────
+    func reactions(mealIds: [UUID]) async throws -> [Reaction]
+    func setReaction(mealId: UUID, emoji: String, on: Bool) async throws
+    func comments(mealId: UUID) async throws -> [Comment]
+    func commentCounts(mealIds: [UUID]) async throws -> [UUID: Int]
+    func addComment(mealId: UUID, text: String) async throws
     func deleteComment(id: UUID) async throws
 
     // ── Groups ───────────────────────────────────────────────────────────────
@@ -99,9 +81,10 @@ protocol Backend: AnyObject {
     func deleteGroup(id: UUID) async throws
     func leaveGroup(id: UUID) async throws
 
-    // ── Group chat ───────────────────────────────────────────────────────────
+    // ── Table chat ───────────────────────────────────────────────────────────
     func posts(groupId: UUID, before: Date?, limit: Int) async throws -> [GroupPost]
-    func createPost(groupId: UUID, text: String, memoryId: UUID?) async throws
+    /// A message, a shared meal (`mealId`), or a dinner pick.
+    func createPost(groupId: UUID, text: String, mealId: UUID?, pick: DinnerPick?) async throws
     func deletePost(id: UUID) async throws
     func postReactions(postIds: [UUID]) async throws -> [PostReaction]
     func setPostReaction(postId: UUID, emoji: String, on: Bool) async throws

@@ -32,11 +32,11 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Take photos of your meals and travels, and for your profile.</string>
+	<string>Take photos of your meals, and for your profile.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Stampd uses your location to find restaurants near you, when you log a meal or roll for dinner. It isn't stored or shared.</string>
+	<string>Stampd uses your location to find restaurants near you when you spin the globe or log a meal. It isn't stored or shared.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Stampd reads where your photos were taken to find the countries you've visited, and lets you add photos to memories. This happens on your phone; nothing is uploaded unless you post it.</string>
+	<string>Stampd reads where a meal photo was taken to find the restaurant you ate at. This happens on your phone; a photo is only uploaded when you add it to a meal.</string>
 	<key>SUPABASE_ANON_KEY</key>
 	<string>$(SUPABASE_ANON_KEY)</string>
 	<key>SUPABASE_URL</key>

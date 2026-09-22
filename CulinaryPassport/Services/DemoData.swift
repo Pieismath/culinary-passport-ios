@@ -1,8 +1,8 @@
 import Foundation
 
 /// The demo cast: you (Alex), three friends, a follower and a public
-/// stranger — with passports, memories, two groups and some chatter.
-/// Dates are relative to today so "2h ago" and "On this day" stay true.
+/// stranger — with meals, cuisines tasted, three tables and some dinner
+/// talk. Dates are relative to today so "2h ago" stays true.
 enum DemoData {
     static let me = DemoBackend.meId
     static let maya = UUID(uuidString: "0D3E0000-0000-4000-8000-000000000002")!
@@ -11,171 +11,96 @@ enum DemoData {
     static let leo = UUID(uuidString: "0D3E0000-0000-4000-8000-000000000005")!
     static let hana = UUID(uuidString: "0D3E0000-0000-4000-8000-000000000006")!
 
+    static let dinnerClub = UUID(uuidString: "0D3E0000-0000-4000-8000-0000000000A1")!
+    static let family = UUID(uuidString: "0D3E0000-0000-4000-8000-0000000000A2")!
+    static let lunch = UUID(uuidString: "0D3E0000-0000-4000-8000-0000000000A3")!
+
     static var followDates: [UUID: Date] = [:]
 
     private static func ago(days: Double = 0, hours: Double = 0) -> Date {
         Date().addingTimeInterval(-(days * 86400 + hours * 3600))
     }
 
-    /// yyyy-MM-dd for `years` ago today (the "On this day" memory).
-    private static func sameDay(yearsAgo: Int) -> String {
-        let date = Calendar.current.date(byAdding: .year, value: -yearsAgo, to: Date()) ?? Date()
-        return DayFormat.string(from: date)
-    }
-
     static func seed(into db: DemoBackend) {
         let joined = ago(days: 420)
         db.seedProfile(Profile(id: me, name: "Alex Rivera", color: "#2fbf8a", homeCity: "San Francisco",
                                homeCountry: "US", username: "alex.rivera",
-                               bio: "Collecting stamps, sunsets and train windows.", avatarUrl: nil,
-                               isPublic: true, createdAt: joined, yearlyGoal: 5))
-        db.seedProfile(Profile(id: maya, name: "Maya Chen", color: "#e8883a", homeCity: "Vancouver",
-                               homeCountry: "CA", username: "mayachen", bio: "Lakes, mountains, repeat.",
+                               bio: "Working through the world one dinner at a time.", avatarUrl: nil,
+                               isPublic: true, createdAt: joined, yearlyGoal: 12))
+        db.seedProfile(Profile(id: maya, name: "Maya Chen", color: "#e8883a", homeCity: "Oakland",
+                               homeCountry: "US", username: "mayachen", bio: "Will cross town for a good dumpling.",
                                avatarUrl: nil, isPublic: true, createdAt: joined, yearlyGoal: nil))
-        db.seedProfile(Profile(id: sam, name: "Sam Okafor", color: "#3b82e0", homeCity: "London",
-                               homeCountry: "GB", username: "samtravels", bio: "One carry-on, 41 countries.",
-                               avatarUrl: nil, isPublic: true, createdAt: joined, yearlyGoal: 8))
+        db.seedProfile(Profile(id: sam, name: "Sam Okafor", color: "#3b82e0", homeCity: "San Francisco",
+                               homeCountry: "GB", username: "sam.eats", bio: "Street food over tablecloths.",
+                               avatarUrl: nil, isPublic: true, createdAt: joined, yearlyGoal: 10))
         db.seedProfile(Profile(id: priya, name: "Priya Nair", color: "#d86fb4", homeCity: "Bengaluru",
                                homeCountry: "IN", username: "priya", bio: nil,
                                avatarUrl: nil, isPublic: false, createdAt: joined, yearlyGoal: nil))
         db.seedProfile(Profile(id: leo, name: "Leo Martins", color: "#8b6fd8", homeCity: "São Paulo",
-                               homeCountry: "BR", username: "leo.m", bio: "Waterfalls > beaches.",
+                               homeCountry: "BR", username: "leo.m", bio: "Churrasco purist, arepa convert.",
                                avatarUrl: nil, isPublic: true, createdAt: joined, yearlyGoal: nil))
-        db.seedProfile(Profile(id: hana, name: "Hana Sato", color: "#2fa8bf", homeCity: "Osaka",
-                               homeCountry: "JP", username: "hana.sato", bio: "Slow travel, film cameras.",
+        db.seedProfile(Profile(id: hana, name: "Hana Sato", color: "#2fa8bf", homeCity: "San Francisco",
+                               homeCountry: "JP", username: "hana.sato", bio: "Noodles, every country's version.",
                                avatarUrl: nil, isPublic: true, createdAt: joined, yearlyGoal: nil))
-
-        // Friends = mutual follows (or a shared group).
+        // Friends = mutual follows (or a shared table).
         for (a, b) in [(me, maya), (maya, me), (me, sam), (sam, me), (me, priya), (priya, me),
                        (leo, me), (me, hana), (maya, sam), (sam, maya)] {
             db.seedFollow(a, b)
         }
         followDates = [maya: ago(days: 200), sam: ago(days: 150), priya: ago(days: 90), leo: ago(days: 2)]
 
-        // ── Alex's passport ──────────────────────────────────────────────────
-        let manual: [(String, String?, String?, Stamp.Source)] = [
-            ("US", "1998-06-01", "2026-08-22", .manual), ("CA", "2018-07-04", "2018-07-11", .photos),
-            ("MX", "2019-03-15", "2019-03-22", .photos), ("FR", "2021-09-10", "2021-09-18", .photos),
-            ("VA", "2021-09-20", "2021-09-20", .manual), ("ES", "2023-06-02", "2023-06-09", .photos),
-            ("GB", "2023-05-28", "2023-06-01", .photos),
-        ]
-        for (code, first, last, source) in manual {
-            db.seedStamp(Stamp(userId: me, countryCode: code, firstVisited: first, lastVisited: last,
-                               source: source, createdAt: ago(days: 300)))
-        }
-
-        let mine: [(String, String, String, String, [String], String?, Double, Double, Visibility, Double)] = [
-            ("Big Sur", "Big Sur", "US", "2026-08-22", ["demo/bigsur-1"], "Highway 1 with the windows down. Fog rolled in right on cue.", 36.27, -121.81, .friends, 26),
-            ("Oia sunset", "Santorini", "GR", "2025-07-02", ["demo/santorini-1", "demo/santorini-2"], "Everyone claps when the sun goes down. We clapped.", 36.46, 25.38, .public, 440),
-            ("Trastevere", "Rome", "IT", "2025-05-03", ["demo/rome-1"], "Cacio e pepe, then a very long walk.", 41.89, 12.47, .friends, 500),
-            ("Skógafoss", "Skógar", "IS", "2025-02-18", ["demo/iceland-1", "demo/reykjavik-1"], "Soaked, frozen, grinning. Northern lights two nights later.", 63.53, -19.51, .public, 580),
-            ("Machu Picchu", "Cusco", "PE", sameDay(yearsAgo: 2), ["demo/machupicchu-1", "demo/machupicchu-2"], "Four days on the Inca Trail for this view. Worth every step.", -13.16, -72.54, .public, 730),
-            ("Victoria Peak", "Hong Kong", "HK", "2024-04-19", ["demo/hongkong-1"], nil, 22.27, 114.15, .friends, 880),
-            ("Gyeongbokgung", "Seoul", "KR", "2024-04-16", ["demo/seoul-1"], "Rented hanbok. Zero regrets.", 37.58, 126.98, .friends, 882),
-            ("Fushimi Inari", "Kyoto", "JP", "2024-04-12", ["demo/kyoto-1", "demo/kyoto-2"], "Went at 6am and had the gates almost to ourselves.", 34.97, 135.77, .public, 886),
-            ("Shibuya Crossing", "Tokyo", "JP", "2024-04-09", ["demo/tokyo-1"], nil, 35.66, 139.70, .friends, 889),
-            ("Jemaa el-Fnaa", "Marrakech", "MA", "2023-06-20", ["demo/marrakech-1"], "Orange juice stalls as far as you can see.", 31.63, -7.99, .friends, 1190),
-            ("Belém", "Lisbon", "PT", "2023-06-14", ["demo/lisbon-1"], "Pastéis still warm. Tram 28 at golden hour.", 38.70, -9.21, .public, 1195),
-            ("Gardens by the Bay", "Singapore", "SG", "2022-11-08", ["demo/singapore-1"], nil, 1.28, 103.86, .friends, 1410),
-            ("Hạ Long Bay", "Hạ Long", "VN", "2022-11-03", ["demo/halong-1", "demo/halong-2"], "Slept on a junk boat. Kayaked through a cave.", 20.91, 107.18, .public, 1414),
-            ("Grand Palace", "Bangkok", "TH", "2022-10-28", ["demo/bangkok-1"], nil, 13.75, 100.49, .friends, 1420),
-            ("Milford Sound", "Fiordland", "NZ", "2020-01-15", ["demo/milford-1"], "Rain made a hundred waterfalls.", -44.64, 167.90, .friends, 2440),
-            ("Opera House", "Sydney", "AU", "2020-01-05", ["demo/sydney-1"], nil, -33.86, 151.21, .public, 2450),
-        ]
-        var memoryIds: [String: UUID] = [:]
-        for (title, city, code, date, photos, notes, lat, lng, visibility, createdDaysAgo) in mine {
-            let id = UUID()
-            memoryIds[title] = id
-            db.seedMemory(Memory(id: id, userId: me, countryCode: code, title: title, city: city, date: date,
-                                 notes: notes, photos: photos, lat: lat, lng: lng, visibility: visibility,
-                                 createdAt: ago(days: createdDaysAgo)))
-        }
-        db.seedBucket(["NO", "AR", "ZA", "EG", "NP", "CU", "TZ", "PF"])
-
-        // ── Friends' passports + recent memories ─────────────────────────────
-        func stamps(_ user: UUID, _ codes: [String], firstYear: Int) {
-            for (i, code) in codes.enumerated() {
-                let year = firstYear + i % 8
-                db.seedStamp(Stamp(userId: user, countryCode: code, firstVisited: "\(year)-05-01",
-                                   lastVisited: "\(year)-05-09", source: .photos, createdAt: ago(days: 400)))
-            }
-        }
-        stamps(maya, ["CA", "US", "MX", "FR", "IT", "JP", "IS", "CR", "PE"], firstYear: 2015)
-        stamps(sam, ["GB", "FR", "ES", "PT", "MA", "US", "JP", "TH", "ZA", "KE", "IE", "NL", "DE"], firstYear: 2012)
-        stamps(priya, ["IN", "AE", "SG", "TH", "LK", "GB", "MV"], firstYear: 2016)
-        stamps(leo, ["BR", "PT", "CL", "US", "UY"], firstYear: 2017)
-        stamps(hana, ["JP", "KR", "TW", "FR", "IT", "CH"], firstYear: 2018)
-
-        let theirs: [(UUID, String, String, String, Int, [String], String?, Double, Double, Visibility, Double)] = [
-            (sam, "Petra", "Wadi Musa", "JO", 0, ["demo/petra-1", "demo/petra-2"], "Walked the Siq at dawn. Country #42!", 30.33, 35.44, .friends, 0.1),
-            (hana, "Hallstatt", "Hallstatt", "AT", 0, ["demo/hallstatt-1"], "Postcard town, real people.", 47.56, 13.65, .public, 1.2),
-            (priya, "Hội An lanterns", "Hội An", "VN", 0, ["demo/hoian-1"], "Full moon festival — the whole river glowed.", 15.88, 108.33, .friends, 2.4),
-            (maya, "Lake Louise", "Banff", "CA", 0, ["demo/lakelouise-1", "demo/lakelouise-2"], "That color is real, I promise.", 51.42, -116.18, .friends, 5),
-            (hana, "Cappadocia", "Göreme", "TR", 0, ["demo/cappadocia-1"], "4:30am alarm for balloons. Worth it.", 38.64, 34.83, .public, 9),
-            (maya, "Sagrada Família", "Barcelona", "ES", 0, ["demo/barcelona-1"], nil, 41.40, 2.17, .friends, 16),
-            (leo, "Iguazu Falls", "Puerto Iguazú", "AR", 0, ["demo/iguazu-1"], "Garganta del Diablo is LOUD.", -25.69, -54.44, .public, 21),
-            (sam, "Edinburgh Castle", "Edinburgh", "GB", 0, ["demo/edinburgh-1"], nil, 55.95, -3.20, .friends, 38),
-            (maya, "Bora Bora", "Bora Bora", "PF", 0, ["demo/borabora-1"], "Overwater bungalow for our anniversary.", -16.50, -151.74, .friends, 95),
-            (sam, "Table Mountain", "Cape Town", "ZA", 0, ["demo/capetown-1"], nil, -33.96, 18.40, .friends, 120),
-            (priya, "Taj Mahal", "Agra", "IN", 0, ["demo/agra-1"], nil, 27.18, 78.04, .friends, 190),
-        ]
-        var friendMemory: [String: UUID] = [:]
-        for (user, title, city, code, _, photos, notes, lat, lng, visibility, createdDaysAgo) in theirs {
-            let id = UUID()
-            friendMemory[title] = id
-            let created = ago(days: createdDaysAgo)
-            db.seedMemory(Memory(id: id, userId: user, countryCode: code, title: title, city: city,
-                                 date: DayFormat.string(from: created.addingTimeInterval(-86400)),
-                                 notes: notes, photos: photos, lat: lat, lng: lng, visibility: visibility,
-                                 createdAt: created))
-        }
-        // Sam's Petra stamp is brand new (the "stamped a new country" moment).
-        db.seedStamp(Stamp(userId: sam, countryCode: "JO", firstVisited: DayFormat.string(from: ago(days: 1)),
-                           lastVisited: DayFormat.string(from: ago(days: 1)), source: .memory, createdAt: ago(hours: 3)))
-        db.seedStamp(Stamp(userId: priya, countryCode: "VN", firstVisited: DayFormat.string(from: ago(days: 3)),
-                           lastVisited: DayFormat.string(from: ago(days: 3)), source: .memory, createdAt: ago(days: 2.4)))
-
-        // ── Meals: the weekly half of the passport ───────────────────────────
-        // (user, restaurant, dish, cuisine, city, photo, note, lat, lng, days ago)
-        let meals: [(UUID, String, String, String, String, String?, String?, Double, Double, Double)] = [
+        // ── Meals ────────────────────────────────────────────────────────────
+        // (user, restaurant, dish, cuisine, city, photo, note, lat, lng, days ago, visibility)
+        let meals: [(UUID, String, String, String, String, String?, String?, Double, Double, Double, Visibility)] = [
             (me, "Supra", "Khachapuri", "GE", "San Francisco", "demo/khachapuri-1",
-             "Cheese boat, butter, egg. Stirred it all together like they said. No regrets.", 37.76, -122.42, 3),
-            (me, "Ramen Kiyo", "Tonkotsu ramen", "JP", "San Francisco", "demo/ramen-1", nil, 37.78, -122.41, 9),
+             "Cheese boat, butter, egg. Stirred it all together like they said. No regrets.", 37.76, -122.42, 3, .friends),
+            (me, "Ramen Kiyo", "Tonkotsu ramen", "JP", "San Francisco", "demo/ramen-1", nil, 37.78, -122.41, 9, .public),
             (me, "Taqueria La Paloma", "Al pastor tacos", "MX", "San Francisco", "demo/tacos-1",
-             "Pineapple on the spit. Four tacos was one too many. Five next time.", 37.75, -122.42, 12),
-            (me, "Pho Hoa Lan", "Pho tai", "VN", "Oakland", "demo/pho-1", nil, 37.80, -122.27, 17),
-            (me, "Chalaca", "Ceviche mixto", "PE", "San Francisco", "demo/ceviche-1", nil, 37.79, -122.40, 24),
-            (me, "Seoul Garden", "Dolsot bibimbap", "KR", "San Francisco", "demo/bibimbap-1", nil, 37.78, -122.43, 31),
-            (me, "Dosa Mandir", "Masala dosa", "IN", "Berkeley", "demo/dosa-1", nil, 37.87, -122.27, 38),
-            (me, "Osteria Vela", "Cacio e pepe", "IT", "San Francisco", "demo/pasta-1", nil, 37.80, -122.41, 45),
-            (me, "Isan Street", "Khao soi", "TH", "Oakland", "demo/khaosoi-1", nil, 37.81, -122.26, 60),
+             "Pineapple on the spit. Four tacos was one too many. Five next time.", 37.75, -122.42, 12, .public),
+            (me, "Pho Hoa Lan", "Pho tai", "VN", "Oakland", "demo/pho-1", nil, 37.80, -122.27, 17, .friends),
+            (me, "Chalaca", "Ceviche mixto", "PE", "San Francisco", "demo/ceviche-1", nil, 37.79, -122.40, 24, .friends),
+            (me, "Seoul Garden", "Dolsot bibimbap", "KR", "San Francisco", "demo/bibimbap-1", nil, 37.78, -122.43, 31, .friends),
+            (me, "Dosa Mandir", "Masala dosa", "IN", "Berkeley", "demo/dosa-1", nil, 37.87, -122.27, 38, .friends),
+            (me, "Osteria Vela", "Cacio e pepe", "IT", "San Francisco", "demo/pasta-1", nil, 37.80, -122.41, 45, .public),
+            (me, "Ramen Kiyo", "Spicy miso ramen", "JP", "San Francisco", "demo/ramen-2", nil, 37.78, -122.41, 52, .friends),
+            (me, "Isan Street", "Khao soi", "TH", "Oakland", "demo/khaosoi-1", nil, 37.81, -122.26, 60, .friends),
             (me, "Lalibela Kitchen", "Doro wat", "ET", "Oakland", "demo/injera-1",
-             "Ate with our hands, which is the right way to do it.", 37.83, -122.26, 75),
-            (maya, "Burmese Tea House", "Tea leaf salad", "MM", "Vancouver", "demo/teasalad-1",
-             "Crunchy, sour, a bit wild. Ordering it every time now.", 49.26, -123.11, 0.3),
-            (sam, "Kabul Kitchen", "Mantu", "AF", "London", "demo/mantu-1", nil, 51.52, -0.10, 1.6),
-            (hana, "Plov House", "Wedding plov", "UZ", "Seoul", "demo/plov-1",
-             "Carrots, lamb, the rice all shiny. A whole wedding in a bowl.", 37.55, 126.99, 3.2),
-            (leo, "Arepa Lab", "Reina pepiada", "VE", "São Paulo", "demo/arepa-1", nil, -23.56, -46.65, 6),
-            (priya, "Gaúcho Grill", "Picanha", "BR", "Bengaluru", "demo/churrasco-1", nil, 12.97, 77.59, 8),
-            (maya, "Lalibela Kitchen", "Injera platter", "ET", "Oakland", "demo/injera-2", nil, 37.83, -122.26, 11),
+             "Ate with our hands, which is the right way to do it.", 37.83, -122.26, 75, .friends),
+            (me, "Golden Dragon", "Xiao long bao", "CN", "San Francisco", "demo/dumplings-1", nil, 37.79, -122.41, 90, .friends),
+            (me, "Istanbul Grill", "Iskender kebab", "TR", "San Francisco", "demo/kebab-1", nil, 37.77, -122.42, 130, .friends),
+            (maya, "Bissap Baobab", "Thieboudienne", "SN", "San Francisco", "demo/thieb-1",
+             "Rice, fish, a tomato sauce I'd drink by the glass. First Senegalese!", 37.759, -122.419, 0.3, .friends),
+            (sam, "Helmand Palace", "Mantu", "AF", "San Francisco", "demo/mantu-1", nil, 37.799, -122.422, 1.6, .friends),
+            (hana, "Samarkand Grill", "Wedding plov", "UZ", "San Francisco", "demo/plov-1",
+             "Carrots, lamb, the rice all shiny. A whole wedding in a bowl.", 37.769, -122.447, 3.2, .public),
+            (leo, "Arepa Lab", "Reina pepiada", "VE", "São Paulo", "demo/arepa-1", nil, -23.56, -46.65, 6, .public),
+            (priya, "Gaúcho Grill", "Picanha", "BR", "Bengaluru", "demo/churrasco-1", nil, 12.97, 77.59, 8, .friends),
+            (maya, "Lalibela Kitchen", "Injera platter", "ET", "Oakland", "demo/injera-2",
+             "Told Alex it was good. Alex was right to listen.", 37.83, -122.26, 11, .friends),
+            (sam, "Suya Spot", "Beef suya", "NG", "Oakland", "demo/suya-1", nil, 37.812, -122.268, 14, .friends),
+            (hana, "Pho Hoa Lan", "Pho ga", "VN", "Oakland", "demo/pho-2", nil, 37.80, -122.27, 20, .public),
         ]
-        for (user, restaurant, dish, code, city, photo, note, lat, lng, daysAgo) in meals {
+        var mealIds: [String: UUID] = [:]
+        for (user, restaurant, dish, code, city, photo, note, lat, lng, daysAgo, visibility) in meals {
             let created = ago(days: daysAgo)
-            db.seedMemory(Memory(id: UUID(), userId: user, countryCode: code, title: "", city: city,
-                                 date: DayFormat.string(from: created), notes: note,
-                                 photos: photo.map { [$0] } ?? [], lat: lat, lng: lng,
-                                 visibility: .friends, createdAt: created, kind: .meal,
-                                 restaurantName: restaurant, dish: dish))
+            let id = UUID()
+            mealIds[dish] = id
+            db.seedMeal(Meal(id: id, userId: user, countryCode: code, title: "", city: city,
+                             date: DayFormat.string(from: created), notes: note,
+                             photos: photo.map { [$0] } ?? [], lat: lat, lng: lng,
+                             visibility: visibility, createdAt: created, kind: .meal,
+                             restaurantName: restaurant, dish: dish))
         }
         // Cuisines ticked on the checklist, no meals logged for them.
-        for code in ["CN", "FR", "US", "GR", "ES", "LB"] {
+        for code in ["FR", "US", "GR", "ES", "LB", "DE", "GB"] {
             db.seedTaste(Taste(userId: me, countryCode: code, firstTasted: nil, lastTasted: nil,
                                meals: 0, source: .manual, createdAt: ago(days: 400)))
         }
-        for (user, codes) in [(maya, ["JP", "MX", "IT", "CN", "KR"]), (sam, ["IN", "GB", "ET", "JP"]),
-                              (hana, ["JP", "KR", "TW", "FR"]), (priya, ["IN", "TH", "LK", "SG"]),
-                              (leo, ["BR", "PT", "PE", "AR"])] {
+        for (user, codes) in [(maya, ["JP", "MX", "IT", "CN", "KR", "FR", "TH", "VN", "US"]),
+                              (sam, ["IN", "GB", "JP", "JM", "FR", "IT", "TR", "US", "CN"]),
+                              (hana, ["JP", "KR", "TW", "FR", "IT", "CN", "TH"]),
+                              (priya, ["IN", "TH", "LK", "SG", "CN", "IT", "MX"]),
+                              (leo, ["BR", "PT", "PE", "AR", "IT", "US", "MX", "JP"])] {
             for code in codes {
                 db.seedTaste(Taste(userId: user, countryCode: code, firstTasted: nil, lastTasted: nil,
                                    meals: 0, source: .manual, createdAt: ago(days: 300)))
@@ -183,97 +108,78 @@ enum DemoData {
         }
 
         // ── Reactions + comments ─────────────────────────────────────────────
-        func react(_ user: UUID, _ memory: String?, _ emoji: String, hours: Double) {
-            guard let memory, let id = memoryIds[memory] ?? friendMemory[memory] else { return }
+        func react(_ user: UUID, _ dish: String, _ emoji: String, hours: Double) {
+            guard let id = mealIds[dish] else { return }
             db.seedReaction(Reaction(entryId: id, userId: user, emoji: emoji, createdAt: ago(hours: hours)))
         }
-        react(maya, "Machu Picchu", "😍", hours: 1)
-        react(sam, "Machu Picchu", "🔥", hours: 4)
-        react(priya, "Fushimi Inari", "😍", hours: 70)
-        react(sam, "Oia sunset", "❤️", hours: 30)
-        react(maya, "Oia sunset", "❤️", hours: 29)
-        react(me, "Petra", "🔥", hours: 2)
-        react(maya, "Petra", "😍", hours: 2.5)
-        react(me, "Lake Louise", "❤️", hours: 100)
-        react(priya, "Lake Louise", "🥹", hours: 90)
-
-        func comment(_ user: UUID, _ memory: String, _ text: String, hours: Double) {
-            guard let id = memoryIds[memory] ?? friendMemory[memory] else { return }
+        react(maya, "Khachapuri", "😍", hours: 1)
+        react(sam, "Khachapuri", "🔥", hours: 4)
+        react(priya, "Al pastor tacos", "🤤", hours: 70)
+        react(sam, "Doro wat", "❤️", hours: 30)
+        react(me, "Thieboudienne", "😍", hours: 2)
+        react(sam, "Thieboudienne", "🤤", hours: 2.5)
+        react(me, "Wedding plov", "🔥", hours: 20)
+        func comment(_ user: UUID, _ dish: String, _ text: String, hours: Double) {
+            guard let id = mealIds[dish] else { return }
             db.seedComment(Comment(id: UUID(), entryId: id, authorId: user, text: text, createdAt: ago(hours: hours)))
         }
-        comment(sam, "Oia sunset", "Adding this to the list", hours: 5)
-        comment(maya, "Oia sunset", "The colors!!", hours: 28)
-        comment(maya, "Machu Picchu", "Did you do the full four days?? Legend", hours: 1.5)
-        comment(me, "Petra", "Congrats on 42 🎉", hours: 2)
-        comment(sam, "Petra", "Cheers! Wadi Rum next", hours: 1.8)
+        comment(maya, "Khachapuri", "Is this the place on Valencia?? Taking me there", hours: 1.5)
+        comment(sam, "Khachapuri", "The egg stir is the whole point", hours: 3)
+        comment(me, "Thieboudienne", "Adding it to the list", hours: 2)
+        comment(maya, "Thieboudienne", "Get the bissap juice too", hours: 1.8)
 
-        // ── Groups ───────────────────────────────────────────────────────────
-        let europe = Group(id: UUID(uuidString: "0D3E0000-0000-4000-8000-0000000000A1")!, name: "Europe 2027",
-                           coverPhoto: nil, inviteCode: "europe2027", createdBy: me, createdAt: ago(days: 60))
-        db.seedGroup(europe, members: [me, maya, sam])
-        let hikers = Group(id: UUID(uuidString: "0D3E0000-0000-4000-8000-0000000000A2")!, name: "Rivera family",
-                           coverPhoto: nil, inviteCode: "riverafam", createdBy: priya, createdAt: ago(days: 180))
-        db.seedGroup(hikers, members: [priya, me, leo])
+        // ── Tables ───────────────────────────────────────────────────────────
+        let club = Group(id: dinnerClub, name: "Friday Dinner Club", coverPhoto: nil,
+                         inviteCode: "fridaydinner", createdBy: me, createdAt: ago(days: 60))
+        db.seedGroup(club, members: [me, maya, sam])
+        let rivera = Group(id: family, name: "Rivera family", coverPhoto: nil,
+                           inviteCode: "riverafam", createdBy: priya, createdAt: ago(days: 180))
+        db.seedGroup(rivera, members: [priya, me, leo])
+        let office = Group(id: lunch, name: "Office lunch", coverPhoto: nil,
+                           inviteCode: "officelunch", createdBy: hana, createdAt: ago(days: 30))
+        db.seedGroup(office, members: [hana, me, sam])
 
-        // ── Trips you're planning (and one that already happened) ────────────
-        func day(inDays: Int) -> String {
-            DayFormat.string(from: Date().addingTimeInterval(Double(inDays) * 86400))
+        // ── Restaurants to try ───────────────────────────────────────────────
+        func save(_ cuisine: String, _ title: String, _ city: String, _ lat: Double, _ lng: Double,
+                  note: String = "", from dish: String? = nil, daysAgo: Double) {
+            db.seedSavedPlace(SavedPlace(id: UUID(), userId: me, countryCode: "US", title: title, city: city,
+                                         lat: lat, lng: lng, note: note,
+                                         sourceEntryId: dish.flatMap { mealIds[$0] },
+                                         done: false, createdAt: ago(days: daysAgo), cuisineCode: cuisine))
         }
-        let europeTrip = TripPlan(id: UUID(uuidString: "0D3E0000-0000-4000-8000-0000000000B1")!, userId: me,
-                                  name: "Alps by rail", countryCodes: ["FR", "IT", "CH"],
-                                  startsOn: day(inDays: 201), endsOn: day(inDays: 216), groupId: europe.id,
-                                  notes: "Trains between everything. No flights.", createdAt: ago(days: 40))
-        let patagonia = TripPlan(id: UUID(uuidString: "0D3E0000-0000-4000-8000-0000000000B2")!, userId: me,
-                                 name: "Patagonia, one day", countryCodes: ["AR", "CL"],
-                                 startsOn: nil, endsOn: nil, groupId: nil,
-                                 notes: "The W trek, end of season.", createdAt: ago(days: 120))
-        // The Japan/Korea/Hong Kong run in the stamp book was planned first —
-        // its memories turn it into a chapter.
-        let blossom = TripPlan(id: UUID(uuidString: "0D3E0000-0000-4000-8000-0000000000B3")!, userId: me,
-                               name: "Cherry blossom loop", countryCodes: ["JP", "KR", "HK"],
-                               startsOn: "2024-04-08", endsOn: "2024-04-20", groupId: nil,
-                               notes: "", createdAt: ago(days: 920))
-        for plan in [europeTrip, patagonia, blossom] { db.seedTripPlan(plan) }
+        save("MM", "Burma Superstar", "San Francisco", 37.783, -122.463,
+             note: "Friday's spin. Get the tea leaf salad.", daysAgo: 2)
+        save("AF", "Helmand Palace", "San Francisco", 37.799, -122.422,
+             note: "Sam's mantu", from: "Mantu", daysAgo: 1.5)
+        save("UZ", "Samarkand Grill", "San Francisco", 37.769, -122.447,
+             note: "Hana's plov place", from: "Wedding plov", daysAgo: 3)
 
-        func save(_ trip: TripPlan?, _ code: String, _ title: String, _ city: String,
-                  _ lat: Double?, _ lng: Double?, note: String = "", from memory: String? = nil,
-                  done: Bool = false, daysAgo: Double) {
-            db.seedSavedPlace(SavedPlace(id: UUID(), userId: me, tripId: trip?.id, countryCode: code,
-                                         title: title, city: city, lat: lat, lng: lng, note: note,
-                                         sourceEntryId: memory.flatMap { friendMemory[$0] },
-                                         done: done, createdAt: ago(days: daysAgo)))
-        }
-        save(europeTrip, "IT", "Cinque Terre", "Monterosso", 44.15, 9.65,
-             note: "Walk the coast path early, before the ferries.", daysAgo: 30)
-        save(europeTrip, "FR", "Aiguille du Midi", "Chamonix", 45.88, 6.89,
-             note: "First cable car, clear mornings only.", daysAgo: 22)
-        save(europeTrip, "CH", "Lauterbrunnen valley", "Lauterbrunnen", 46.59, 7.91, daysAgo: 12)
-        save(patagonia, "CL", "Torres del Paine", "Puerto Natales", -50.94, -73.41, daysAgo: 110)
-        save(patagonia, "AR", "Perito Moreno", "El Calafate", -50.47, -73.05, daysAgo: 108)
-        save(nil, "AT", "Hallstatt", "Hallstatt", 47.56, 13.65,
-             note: "Hana says go on a weekday.", from: "Hallstatt", daysAgo: 1.1)
-        save(nil, "JO", "Petra", "Wadi Musa", 30.33, 35.44, from: "Petra", daysAgo: 0.1)
-        save(nil, "ES", "Sagrada Família", "Barcelona", 41.40, 2.17,
-             note: "Book the towers.", from: "Sagrada Família", daysAgo: 15)
-
-        func post(_ group: Group, _ author: UUID, _ text: String, memory: String? = nil, hours: Double) -> UUID {
+        // ── Dinner talk ──────────────────────────────────────────────────────
+        func post(_ group: Group, _ author: UUID, _ text: String, meal: String? = nil,
+                  pick: DinnerPick? = nil, hours: Double) -> UUID {
             let id = UUID()
             db.seedPost(GroupPost(id: id, groupId: group.id, authorId: author,
-                                  entryId: memory.flatMap { memoryIds[$0] ?? friendMemory[$0] },
-                                  text: text, photos: [], createdAt: ago(hours: hours)))
+                                  entryId: meal.flatMap { mealIds[$0] },
+                                  text: text.isEmpty ? (pick?.fallbackText ?? "") : text,
+                                  photos: [], createdAt: ago(hours: hours), pick: pick))
             return id
         }
-        _ = post(europe, maya, "Okay — Portugal or Greece first?", hours: 50)
-        let greece = post(europe, me, "Greece. Santorini in early July is unreal.", memory: "Oia sunset", hours: 49)
-        _ = post(europe, sam, "Only if we do Lisbon on the way back", hours: 48)
-        let dates = post(europe, maya, "Flights look cheapest 12–26 June 👀", hours: 6)
-        db.seedPostReaction(PostReaction(postId: greece, userId: maya, emoji: "🔥"))
-        db.seedPostReaction(PostReaction(postId: greece, userId: sam, emoji: "👍"))
-        db.seedPostReaction(PostReaction(postId: dates, userId: me, emoji: "🙌"))
-        db.seedPostComment(PostComment(id: UUID(), postId: dates, authorId: sam, parentId: nil,
-                                       text: "Booking leave tomorrow", createdAt: ago(hours: 5)))
-
-        _ = post(hikers, priya, "Hội An was magical. Next family trip: Vietnam?", memory: "Hội An lanterns", hours: 58)
-        _ = post(hikers, leo, "Only if there's a waterfall", hours: 40)
+        _ = post(club, maya, "Where are we eating Friday? Something none of us has had 🍽️", hours: 50)
+        let spin = post(club, me, "", pick: DinnerPick(cuisineCode: "MM"), hours: 49.5)
+        let burma = post(club, me, "Burma Superstar on Clement? Tea leaf salad is supposed to be the move",
+                         pick: DinnerPick(cuisineCode: "MM", placeName: "Burma Superstar",
+                                          placeAddress: "309 Clement St, San Francisco",
+                                          placeLat: 37.783, placeLng: -122.463), hours: 49)
+        _ = post(club, sam, "Never had Burmese. I'm in", hours: 48)
+        _ = post(club, maya, "Tried Senegalese last night — backup for next Friday?", meal: "Thieboudienne", hours: 6)
+        db.seedPostReaction(PostReaction(postId: spin, userId: sam, emoji: "🔥"))
+        db.seedPostReaction(PostReaction(postId: burma, userId: maya, emoji: GroupPost.imIn))
+        db.seedPostReaction(PostReaction(postId: burma, userId: sam, emoji: GroupPost.imIn))
+        db.seedPostComment(PostComment(id: UUID(), postId: burma, authorId: maya, parentId: nil,
+                                       text: "Booking for 7", createdAt: ago(hours: 47)))
+        _ = post(rivera, priya, "Sunday lunch — somewhere new for once?", hours: 58)
+        _ = post(rivera, leo, "", pick: DinnerPick(cuisineCode: "PE"), hours: 40)
+        _ = post(rivera, leo, "Only if there's ceviche", hours: 39.5)
+        _ = post(office, hana, "An Uzbek place opened on 4th. Plov Thursday?", meal: "Wedding plov", hours: 3)
     }
 }
