@@ -195,7 +195,9 @@ struct GlobeScreen: View {
                     },
                     isEmphasized: { app.tastedCodes.contains($0) || $0 == landed || others.contains($0) },
                     landingBias: 0.04,
-                    fitMargin: 1.05
+                    fitMargin: 1.05,
+                    // Your world starts at home.
+                    initialCenter: app.me?.homeCountry.flatMap { CountryStore.byCode[$0]?.centroid }
                 )
                 // SceneKit is opaque to VoiceOver: describe the globe and
                 // offer its jobs as actions.
@@ -274,6 +276,7 @@ struct GlobeScreen: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Color.ink)
                         .lineLimit(1)
+                        .frame(maxWidth: 92, alignment: .leading)
                 }
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 9, weight: .bold))
@@ -284,7 +287,7 @@ struct GlobeScreen: View {
             .padding(.vertical, 6)
             .background(.regularMaterial, in: Capsule())
             .overlay(Capsule().strokeBorder(Color.hairline.opacity(0.6), lineWidth: 0.5))
-            .frame(maxWidth: 136, alignment: .leading)
+            .fixedSize()
         }
         .disabled(spinning)
         .accessibilityLabel("Spinning for \(table?.name ?? "just you")")

@@ -333,12 +333,13 @@ struct SpinCoaster: View {
                     .foregroundStyle(ink)
                 Text(Country.flag(for: code))
                     .font(.system(size: size * 0.3))
+                // Below the middle the coaster narrows: keep the name inside its ring.
                 Text(Cuisine.name(for: code).uppercased())
                     .font(.system(size: size * 0.1, weight: .heavy, design: .rounded))
                     .foregroundStyle(Color.ink)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
-                    .padding(.horizontal, size * 0.16)
+                    .padding(.horizontal, size * 0.21)
             }
         }
         .frame(width: size, height: size)

@@ -84,6 +84,8 @@ struct GlobeCanvas: UIViewRepresentable {
     var landingBias: Float? = nil
     /// Paper margin around the globe when it's framed (1 = edge to edge).
     var fitMargin: Float = 1.12
+    /// Where the globe faces when it first appears (no flight, no selection).
+    var initialCenter: (lat: Double, lng: Double)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(selected: $selected) }
 
@@ -123,6 +125,7 @@ struct GlobeCanvas: UIViewRepresentable {
         coordinator.onLongPress = onLongPress
         coordinator.landingBias = landingBias
         coordinator.fitMargin = fitMargin
+        coordinator.faceStart(initialCenter)
         coordinator.apply(style: style)
         recolor(coordinator)
         return view
@@ -137,6 +140,8 @@ struct GlobeCanvas: UIViewRepresentable {
     func updateUIView(_ view: SCNView, context: Context) {
         let coordinator = context.coordinator
         coordinator.onLongPress = onLongPress
+        // The starting point can arrive after the globe (a profile loading).
+        coordinator.faceStart(initialCenter)
         if coordinator.appliedStyle != style { coordinator.apply(style: style) }
         recolor(coordinator)
         coordinator.showOutline(for: selected)
@@ -382,6 +387,7 @@ struct GlobeCanvas: UIViewRepresentable {
             guard let view = scnView else { return }
             switch gesture.state {
             case .began:
+                settled = true
                 cancelDrive()
             case .changed:
                 let t = gesture.translation(in: view)
@@ -497,6 +503,7 @@ struct GlobeCanvas: UIViewRepresentable {
         // ── Focus (spin / fly) ───────────────────────────────────────────────
 
         func focus(on code: String, style: FocusRequest.Style, onLanded: ((String?) -> Void)?) {
+            settled = true
             guard let country = CountryStore.byCode[code] else {
                 announce { onLanded?(nil) }
                 return
@@ -643,6 +650,24 @@ struct GlobeCanvas: UIViewRepresentable {
                     flight.onLanded?(flight.code)
                 }
             }
+        }
+
+        /// Whether the globe has been faced at its starting point, or moved
+        /// by hand or a flight since — either way, it stays where it is.
+        private var settled = false
+
+        func faceStart(_ center: (lat: Double, lng: Double)?) {
+            guard !settled, let center else { return }
+            settled = true
+            look(atLat: center.lat, lng: center.lng)
+        }
+
+        /// Face a point, instantly — a starting view, not a flight.
+        func look(atLat lat: Double, lng: Double) {
+            yaw = Float(-lng * .pi / 180)
+            // A little north of it, so it sits just below the middle.
+            pitch = max(-pitchLimit, min(pitchLimit, Float(lat * .pi / 180) - 0.12))
+            applyOrientation()
         }
 
         private func applyOrientation() {
